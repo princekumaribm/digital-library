@@ -1,6 +1,6 @@
 [package]
 name = "digital-library"
-version = "1.0.0"
+version = "2.0.0"
 description = "Offline check-in/check-out and billing for library computers"
 edition = "2021"
 publish = false
