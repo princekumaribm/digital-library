@@ -1,0 +1,4 @@
+#!/bin/bash
+# Stop a running copy so the upgraded app is used on next launch (data is kept).
+/usr/bin/pkill -x DigitalLibrary || true
+exit 0

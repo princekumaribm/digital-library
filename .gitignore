@@ -1,0 +1,9 @@
+build/
+dist/
+Digital Library.app/
+__pycache__/
+*.pyc
+.DS_Store
+*.db
+*.db-wal
+*.db-shm

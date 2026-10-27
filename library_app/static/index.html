@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Digital Library</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="auth-screen" id="authScreen" hidden>
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="logo">DL</div>
+      <div>
+        <div class="auth-title" id="authLibraryName">Digital Library</div>
+        <div class="muted small">Computer access desk</div>
+      </div>
+    </div>
+
+    <form id="loginForm" novalidate>
+      <h2>Sign in</h2>
+      <div class="field"><label for="loginUser">Username</label><input id="loginUser" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>
+      <div class="field"><label for="loginPass">Password</label><input id="loginPass" name="password" type="password" autocomplete="current-password" required></div>
+      <p class="form-error" hidden></p>
+      <button class="btn primary block" type="submit">Sign in</button>
+      <button class="link-btn" type="button" id="showReset">Forgot or want to reset the password?</button>
+    </form>
+
+    <form id="resetForm" novalidate hidden>
+      <h2>Reset password</h2>
+      <p class="muted small">Enter your current password <strong>or</strong> the default password, then choose a new one.</p>
+      <div class="field"><label for="resetUser">Username</label><input id="resetUser" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>
+      <div class="field"><label for="resetCurrent">Current or default password</label><input id="resetCurrent" name="current_password" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="resetNew">New password</label><input id="resetNew" name="new_password" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="resetConfirm">Confirm new password</label><input id="resetConfirm" name="confirm_password" type="password" autocomplete="new-password" required></div>
+      <p class="muted small">At least 8 characters, including a letter and a number.</p>
+      <p class="form-error" hidden></p>
+      <button class="btn primary block" type="submit">Reset password</button>
+      <button class="link-btn" type="button" id="showLogin">Back to sign in</button>
+    </form>
+  </div>
+</div>
+
+<div class="layout" id="app" hidden>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">DL</div>
+      <div>
+        <div class="brand-name" id="brandName">Digital Library</div>
+        <div class="brand-sub">Computer access desk</div>
+      </div>
+    </div>
+    <nav>
+      <a href="#dashboard" data-view="dashboard">Dashboard</a>
+      <a href="#members" data-view="members">Members</a>
+      <a href="#history" data-view="history">History</a>
+      <a href="#reports" data-view="reports">Reports</a>
+      <a href="#rates" data-view="rates">Rate Card</a>
+      <a href="#computers" data-view="computers">Computers</a>
+      <a href="#settings" data-view="settings">Settings</a>
+    </nav>
+    <div class="sidebar-user">
+      <span>Signed in as <strong id="whoami"></strong></span>
+      <button class="btn sm sidebar-btn" id="btnLogout">Log out</button>
+    </div>
+    <div class="sidebar-foot">
+      <div class="clock" id="clock"></div>
+      <div class="date" id="date"></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="banner" id="defaultPwBanner" hidden>
+      You are using the default password. <a href="#settings">Change it in Settings</a> to keep your data safe.
+    </div>
+    <!-- Dashboard -->
+    <section class="view" id="view-dashboard" hidden>
+      <header class="page-head">
+        <div><h1>Dashboard</h1><p class="muted">Live view of who is using the computers right now.</p></div>
+        <button class="btn primary" id="btnCheckin">+ New check-in</button>
+      </header>
+      <div class="stats" id="stats"></div>
+      <div class="card">
+        <div class="card-head"><h2>Currently checked in <span class="pill" id="activeCount">0</span></h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Member</th><th>Computer</th><th>Plan</th><th>Checked in</th><th>Time used</th><th class="num">Amount so far</th><th></th></tr></thead>
+            <tbody id="activeBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Members -->
+    <section class="view" id="view-members" hidden>
+      <header class="page-head">
+        <div><h1>Members</h1><p class="muted">Register and manage library members.</p></div>
+        <div class="row">
+          <a class="btn" href="/api/export/members.csv">Export CSV</a>
+          <button class="btn primary" id="btnAddMember">+ Add member</button>
+        </div>
+      </header>
+      <div class="card">
+        <div class="toolbar">
+          <input type="search" id="memberSearch" placeholder="Search by name, ID number, email or phone" autocomplete="off">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>ID number</th><th>Email</th><th>Phone</th><th class="num">Visits</th><th class="num">Total spent</th><th>Status</th><th></th></tr></thead>
+            <tbody id="membersBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- History -->
+    <section class="view" id="view-history" hidden>
+      <header class="page-head">
+        <div><h1>History</h1><p class="muted">All check-ins and check-outs with receipts.</p></div>
+        <button class="btn" id="btnExportSessions">Export CSV</button>
+      </header>
+      <div class="card">
+        <div class="toolbar wrap">
+          <label class="inline">From <input type="date" id="hFrom"></label>
+          <label class="inline">To <input type="date" id="hTo"></label>
+          <select id="hStatus">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <input type="search" id="hSearch" placeholder="Search member, ID, computer, plan" autocomplete="off">
+          <button class="btn" id="hReset">Reset</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Receipt</th><th>Member</th><th>Computer</th><th>Plan</th><th>Check in</th><th>Check out</th><th>Duration</th><th class="num">Total</th><th>Payment</th><th>Status</th><th></th></tr></thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+        <div class="card-foot" id="historySummary"></div>
+      </div>
+    </section>
+
+    <!-- Reports -->
+    <section class="view" id="view-reports" hidden>
+      <header class="page-head">
+        <div><h1>Reports</h1><p class="muted">Revenue and usage based on check-out time.</p></div>
+      </header>
+      <div class="card">
+        <div class="toolbar wrap">
+          <div class="segmented" id="rPresets">
+            <button data-preset="today">Today</button>
+            <button data-preset="7d">Last 7 days</button>
+            <button data-preset="30d">Last 30 days</button>
+            <button data-preset="month">This month</button>
+          </div>
+          <label class="inline">From <input type="date" id="rFrom"></label>
+          <label class="inline">To <input type="date" id="rTo"></label>
+          <button class="btn primary" id="rApply">Apply</button>
+        </div>
+      </div>
+      <div class="stats" id="reportStats"></div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h2>Daily revenue</h2></div><div id="rByDay"></div></div>
+        <div class="card"><div class="card-head"><h2>By payment method</h2></div><div id="rByPayment"></div></div>
+        <div class="card"><div class="card-head"><h2>By rate plan</h2></div><div id="rByPlan"></div></div>
+        <div class="card"><div class="card-head"><h2>Top members</h2></div><div id="rTopMembers"></div></div>
+      </div>
+    </section>
+
+    <!-- Rate card -->
+    <section class="view" id="view-rates" hidden>
+      <header class="page-head">
+        <div><h1>Rate Card</h1><p class="muted">Prices are locked in when a member checks in.</p></div>
+        <button class="btn primary" id="btnAddRate">+ Add rate plan</button>
+      </header>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Plan</th><th class="num">Rate / hour</th><th class="num">Minimum</th><th class="num">Round up to</th><th class="num">Max charge</th><th>Status</th><th></th></tr></thead>
+            <tbody id="ratesBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>Tax &amp; currency</h2></div>
+          <form id="billingForm" class="form-grid pad">
+            <div class="field"><label for="taxPercent">Tax (%)</label><input id="taxPercent" name="tax_percent" type="number" min="0" max="100" step="0.01"></div>
+            <div class="field"><label for="currency">Currency symbol</label><input id="currency" name="currency" maxlength="5"></div>
+            <div class="span2"><button class="btn primary" type="submit">Save</button></div>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Price calculator</h2></div>
+          <div class="pad">
+            <div class="field"><label for="calcMinutes">Minutes used</label><input id="calcMinutes" type="number" min="0" step="1" value="75"></div>
+            <div id="calcResult"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card pad muted small">
+        <strong>How billing works:</strong> time used is rounded up to the nearest whole minute, then up to the plan's
+        "round up to" increment. If that's below the plan minimum, the minimum is charged. The amount is
+        (billable minutes ÷ 60) × hourly rate, capped at the max charge (if set). Discounts are applied before tax.
+      </div>
+    </section>
+
+    <!-- Computers -->
+    <section class="view" id="view-computers" hidden>
+      <header class="page-head">
+        <div><h1>Computers</h1><p class="muted">Manage the workstations members can use.</p></div>
+        <button class="btn primary" id="btnAddComputer">+ Add computer</button>
+      </header>
+      <div class="pc-grid" id="computerGrid"></div>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" id="view-settings" hidden>
+      <header class="page-head">
+        <div><h1>Settings</h1><p class="muted">Library details, backups and server control.</p></div>
+      </header>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>General</h2></div>
+          <form id="settingsForm" class="pad">
+            <div class="field"><label for="sLibraryName">Library name (shown on receipts)</label><input id="sLibraryName" name="library_name" maxlength="80" required></div>
+            <button class="btn primary" type="submit">Save</button>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Data &amp; backup</h2></div>
+          <div class="pad">
+            <p class="muted small">All data is stored only on this Mac:</p>
+            <p class="mono small path" id="sDataDir"></p>
+            <div class="row wrap">
+              <a class="btn" href="/api/backup">Download backup</a>
+              <button class="btn" id="btnRestore">Restore from backup…</button>
+              <input type="file" id="restoreFile" accept=".db,application/vnd.sqlite3" hidden>
+              <a class="btn" href="/api/export/members.csv">Export members</a>
+              <a class="btn" href="/api/export/sessions.csv">Export sessions</a>
+            </div>
+            <p class="muted small">To move to another Mac: download a backup here, install the app on the new Mac, then use “Restore from backup” there.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Account &amp; password</h2></div>
+          <form id="passwordForm" class="pad" novalidate>
+            <p class="muted small">Signed in as <strong id="sUsername"></strong>.</p>
+            <div class="field"><label for="pwCurrent">Current or default password</label><input id="pwCurrent" name="current_password" type="password" autocomplete="current-password" required></div>
+            <div class="field"><label for="pwNew">New password</label><input id="pwNew" name="new_password" type="password" autocomplete="new-password" required></div>
+            <div class="field"><label for="pwConfirm">Confirm new password</label><input id="pwConfirm" name="confirm_password" type="password" autocomplete="new-password" required></div>
+            <p class="muted small">At least 8 characters, including a letter and a number. Login credentials are included in backups.</p>
+            <p class="form-error" hidden></p>
+            <button class="btn primary" type="submit">Change password</button>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Server</h2></div>
+          <div class="pad">
+            <p class="muted small">The app runs a small server on this Mac only (not reachable from other devices). Stop it when the library closes.</p>
+            <button class="btn danger" id="btnShutdown">Stop Digital Library</button>
+            <p class="muted small" id="sVersion"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="modal-root"></div>
+<div id="toasts" aria-live="polite"></div>
+<script src="/app.js"></script>
+</body>
+</html>
