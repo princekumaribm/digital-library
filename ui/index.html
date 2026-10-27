@@ -96,7 +96,7 @@
       <header class="page-head">
         <div><h1>Members</h1><p class="muted">Register and manage library members.</p></div>
         <div class="row">
-          <a class="btn" href="/api/export/members.csv">Export CSV</a>
+          <button class="btn" id="btnExportMembers">Export CSV</button>
           <button class="btn primary" id="btnAddMember">+ Add member</button>
         </div>
       </header>
@@ -219,7 +219,7 @@
     <!-- Settings -->
     <section class="view" id="view-settings" hidden>
       <header class="page-head">
-        <div><h1>Settings</h1><p class="muted">Library details, backups and server control.</p></div>
+        <div><h1>Settings</h1><p class="muted">Library details, password and backups.</p></div>
       </header>
       <div class="grid-2">
         <div class="card">
@@ -232,16 +232,15 @@
         <div class="card">
           <div class="card-head"><h2>Data &amp; backup</h2></div>
           <div class="pad">
-            <p class="muted small">All data is stored only on this Mac:</p>
+            <p class="muted small">All data is stored only on this computer:</p>
             <p class="mono small path" id="sDataDir"></p>
             <div class="row wrap">
-              <a class="btn" href="/api/backup">Download backup</a>
+              <button class="btn" id="btnBackup">Save backup…</button>
               <button class="btn" id="btnRestore">Restore from backup…</button>
-              <input type="file" id="restoreFile" accept=".db,application/vnd.sqlite3" hidden>
-              <a class="btn" href="/api/export/members.csv">Export members</a>
-              <a class="btn" href="/api/export/sessions.csv">Export sessions</a>
+              <button class="btn" id="btnExportMembersAll">Export members</button>
+              <button class="btn" id="btnExportSessionsAll">Export sessions</button>
             </div>
-            <p class="muted small">To move to another Mac: download a backup here, install the app on the new Mac, then use “Restore from backup” there.</p>
+            <p class="muted small">To move to another computer (Mac or Windows): save a backup here, install the app on the new computer, then use “Restore from backup” there.</p>
           </div>
         </div>
         <div class="card">
@@ -257,10 +256,9 @@
           </form>
         </div>
         <div class="card">
-          <div class="card-head"><h2>Server</h2></div>
+          <div class="card-head"><h2>About</h2></div>
           <div class="pad">
-            <p class="muted small">The app runs a small server on this Mac only (not reachable from other devices). Stop it when the library closes.</p>
-            <button class="btn danger" id="btnShutdown">Stop Digital Library</button>
+            <p class="muted small">Digital Library runs entirely on this computer and works without an internet connection. Close the window to quit.</p>
             <p class="muted small" id="sVersion"></p>
           </div>
         </div>

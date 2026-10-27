@@ -213,7 +213,7 @@ table.bill tr.total td { font-size: 20px; font-weight: 800; border-bottom: none;
 .toast.error { border-left-color: #ef4444; }
 .toast.hide { opacity: 0; transform: translateY(6px); }
 
-.stopped { display: grid; place-items: center; align-content: center; min-height: 100vh; text-align: center; gap: 6px; }
+.confirm-text { white-space: pre-line; margin: 0; }
 
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }

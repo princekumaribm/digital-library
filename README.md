@@ -2,7 +2,7 @@
 
 A complete, **offline** desk application for libraries that rent computer time. Register members, check them in and out of computers, and bill them automatically from an editable rate card.
 
-It runs as a normal Mac app: double-click it and a small server starts on your Mac and opens the app in your web browser. No internet connection, accounts, or extra software is required. All data stays on your Mac.
+It's a native desktop app for **macOS and Windows**: double-click it and it opens in its own window. No internet connection, web browser, accounts, or extra software is required. All data stays on your computer.
 
 ---
 
@@ -15,12 +15,12 @@ It runs as a normal Mac app: double-click it and a small server starts on your M
 5. [Signing in and passwords](#signing-in-and-passwords)
 6. [User guide](#user-guide)
 7. [How billing works](#how-billing-works)
-8. [Data, backup and moving to another Mac](#data-backup-and-moving-to-another-mac)
+8. [Data, backup and moving to another computer](#data-backup-and-moving-to-another-computer)
 9. [Troubleshooting](#troubleshooting)
 10. [Uninstalling](#uninstalling)
 11. [Privacy and security](#privacy-and-security)
 12. [Developer guide](#developer-guide)
-13. [API reference](#api-reference)
+13. [Internal API reference](#internal-api-reference)
 
 ---
 
@@ -37,52 +37,63 @@ It runs as a normal Mac app: double-click it and a small server starts on your M
 | **History** | Every session with filters (date range, status, search), receipts, and CSV export. |
 | **Reports** | Revenue, sessions, usage time, average bill, discounts and tax for any date range, broken down by day, payment method, rate plan and top members. |
 | **Computers** | Add, rename, disable or remove workstations, and see at a glance which are free or in use. |
-| **Settings** | Library name (shown on receipts), backup download, restore from backup, CSV exports, and stopping the app. |
+| **Settings** | Library name (shown on receipts), password change, save and restore backups, and CSV exports. |
 
 ---
 
 ## System requirements
 
-- macOS 11 (Big Sur) or later.
-- An Apple Silicon Mac (M1 or newer) for the `arm64` build. See [Building for Intel Macs](#building-for-intel-and-apple-silicon-universal2) if you need an Intel build.
-- A web browser (Safari, Chrome, Firefox, or Edge).
-- No internet connection and no Python installation needed.
+- **macOS** 11 (Big Sur) or later, on Apple Silicon or Intel. The GitHub-built app is universal.
+- **Windows** 10 or 11 (64-bit). The app uses Microsoft Edge WebView2, which is built into Windows 11 and current Windows 10. If it's missing, the installer downloads it once; that's the only time internet may be needed.
+- No web browser, Python or other software needed.
 
 ---
 
 ## Installation
 
-You can ship the app in three ways. All are in the `dist/` folder after a build.
+Installers are produced in `dist/` by a build, and attached to each [GitHub Release](https://github.com/princekumaribm/digital-library/releases).
+
+**macOS**
 
 | File | Best for | How to install |
 |---|---|---|
-| `DigitalLibrary-1.0.0-arm64.pkg` | Most users | Double-click and follow the installer. The app is placed in **Applications**. |
-| `DigitalLibrary-1.0.0-arm64.dmg` | Classic Mac install | Open it and drag **Digital Library** onto the **Applications** shortcut. |
-| `DigitalLibrary-1.0.0-arm64.zip` | Email / file sharing | Double-click to unzip, then drag **Digital Library** into **Applications**. |
+| `DigitalLibrary-<version>-macos-universal.pkg` | Most users | Double-click and follow the installer. The app is placed in **Applications**. |
+| `DigitalLibrary-<version>-macos-universal.dmg` | Classic Mac install | Open it and drag **Digital Library** onto the **Applications** shortcut. |
+| `DigitalLibrary-<version>-macos-universal.zip` | Email / file sharing | Double-click to unzip, then drag **Digital Library** into **Applications**. |
 
-### First launch on another Mac (security prompt)
+**Windows**
 
-The app isn't signed with an Apple Developer ID, so macOS blocks it the first time it's opened on a Mac other than the one that built it:
+| File | Best for | How to install |
+|---|---|---|
+| `DigitalLibrary-<version>-windows-x64-setup.exe` | Most users | Double-click and follow the installer. No admin rights needed. Adds Start menu and desktop shortcuts, and an uninstaller. |
+| `DigitalLibrary-<version>-windows-x64.msi` | IT departments / managed PCs | Install with a double-click or with deployment tools (`msiexec /i …`). |
+| `DigitalLibrary-<version>-windows-x64-portable.zip` | No installation | Unzip and run `DigitalLibrary.exe`. |
 
+### First launch (security prompt)
+
+The app isn't signed with a paid code-signing certificate, so the system warns the first time it's opened.
+
+**macOS:**
 1. In Finder, **right-click** (or Control-click) the `.pkg` or the app and choose **Open**.
 2. Click **Open** in the dialog.
 
 On newer macOS versions, you might need to do this instead: try to open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
 
-You only need to do this once. To remove the prompt entirely, see [Signing and notarization](#signing-and-notarization).
+**Windows:** if **"Windows protected your PC"** (SmartScreen) appears, click **More info → Run anyway**.
+
+You only need to do this once. To remove the prompts entirely, see [Signing and notarization](#signing-and-notarization).
 
 ---
 
 ## Starting and stopping
 
-**Start:** open **Digital Library** from Applications, Launchpad or Spotlight. The app runs in the background, so there's no Dock icon, and the sign-in page opens in your browser at `http://127.0.0.1:8765/`.
+**Start:** open **Digital Library** from Applications, Launchpad or Spotlight (macOS), or from the Start menu or desktop shortcut (Windows). It opens in its own window at the sign-in page.
 
-- Opening the app again while it's running just opens the page again.
-- You can bookmark the page. It works whenever the app is running.
+- Opening it again while it's running brings the existing window to the front. Only one copy runs at a time.
 
-**Stop:** in the web page, go to **Settings → Stop Digital Library**. You'll be warned if members are still checked in. Their sessions are kept and can be checked out after restarting, but **their time keeps counting**.
+**Quit:** close the window, or press **⌘Q** on macOS. Members who are still checked in stay checked in and can be checked out after reopening, but **their time keeps counting**.
 
-Data is saved immediately after every action, so shutting down or restarting the Mac doesn't lose data.
+Data is saved immediately after every action, so quitting or restarting the computer doesn't lose data.
 
 ---
 
@@ -114,11 +125,11 @@ Password rules: at least 8 characters, including at least one letter and one num
 4. Enter and confirm the new password, then click **Reset password**.
 5. Sign in with the new password.
 
-> **Note:** because the default password `Admin@123` always works for resetting, anyone who knows it and can use this Mac can set a new password. Keep the Mac's own login password private and lock the screen when you step away.
+> **Note:** because the default password `Admin@123` always works for resetting, anyone who knows it and can use this computer can set a new password. Keep the computer's own login password private and lock the screen when you step away.
 
 ### Credentials in backups (export and import)
 
-- The username and password are stored in the database, so they're **exported** with **Settings → Download backup**. The password is stored as a secure hash, never as plain text.
+- The username and password are stored in the database, so they're **exported** with **Settings → Save backup…**. The password is stored as a secure hash, never as plain text.
 - **Restore from backup** **imports** the credentials from the backup. Afterwards you're signed out, and you sign in with the username and password from the backup.
 - Backups made before sign-in was added contain no credentials. Restoring one sets the login back to `admin` / `Admin@123`.
 
@@ -219,39 +230,42 @@ At check-out the bill is calculated as follows:
 | 1 h 31 min | 1 h 45 min | ₹105.00 | ₹18.90 | ₹123.90 |
 | 3 h (max charge ₹100) | 3 h | ₹100.00 | ₹18.00 | ₹118.00 |
 
-The amount shown on the Dashboard while a member is checked in is a live estimate. The final amount is calculated by the server at the moment of check-out.
+The amount shown on the Dashboard while a member is checked in is a live estimate. The final amount is calculated by the app at the moment of check-out.
 
 ---
 
-## Data, backup and moving to another Mac
+## Data, backup and moving to another computer
 
 ### Where data is stored
 
-| What | Location |
-|---|---|
-| Database (members, sessions, rates, computers, settings) | `~/Library/Application Support/DigitalLibrary/library.db` |
-| Safety copies made before a restore | `~/Library/Application Support/DigitalLibrary/library-before-restore-<date>.db` |
-| Log file | `~/Library/Logs/DigitalLibrary.log` |
+| What | macOS | Windows |
+|---|---|---|
+| Database (members, sessions, rates, computers, settings, login) | `~/Library/Application Support/DigitalLibrary/library.db` | `%APPDATA%\DigitalLibrary\library.db` |
+| Safety copies made before a restore | same folder, `library-before-restore-<date>.db` | same folder |
 
-Data is **not** inside the app, so reinstalling or upgrading the app keeps your data. Sharing the `.zip`/`.pkg` does **not** share your members' data.
+The macOS location is the same as the earlier browser-based version, so existing data opens automatically in the desktop app.
 
-Tip: in Finder, press **⌘⇧G** and paste a path to open these folders.
+Data is **not** inside the app, so reinstalling or upgrading the app keeps your data. Sharing the installers does **not** share your members' data.
+
+Tip: in Finder, press **⌘⇧G** and paste the path. In Windows Explorer, paste `%APPDATA%\DigitalLibrary` into the address bar.
 
 ### Backups
 
-**Settings → Download backup** saves a complete copy of the database (e.g. `library-backup-20261027-2300.db`) to your Downloads folder. It's safe to do while the app is in use. Back up regularly and keep a copy off the Mac (USB drive or cloud storage).
+**Settings → Save backup…** asks where to save a complete copy of the database (e.g. `library-backup-20261027-2300.db`). It's safe to do while the app is in use. Back up regularly and keep a copy off the computer (USB drive or cloud storage).
 
-**Settings → Export members / Export sessions** download CSV files that open in Excel or Numbers. These are for reporting; use the `.db` backup for restoring.
+**Settings → Export members / Export sessions** (and **Export CSV** on the Members and History pages) save CSV files that open in Excel or Numbers. These are for reporting; use the `.db` backup for restoring.
 
-### Moving to another Mac
+### Moving to another computer
 
-1. On the **old Mac**, check out everyone who is checked in.
-2. On the old Mac: **Settings → Download backup**.
-3. Copy the `.db` file to the new Mac (USB drive, AirDrop, etc.).
-4. On the **new Mac**, install and open Digital Library.
-5. On the new Mac: **Settings → Restore from backup…** and choose the file.
+Backups work across platforms: a backup from a Mac can be restored on Windows, and the other way round.
 
-Everything is transferred: members, history, rate card, computers, settings, **and the login username and password**. After restoring, sign in on the new Mac with the password you used on the old Mac.
+1. On the **old computer**, check out everyone who is checked in.
+2. On the old computer: **Settings → Save backup…**.
+3. Copy the `.db` file to the new computer (USB drive, AirDrop, network share, etc.).
+4. On the **new computer**, install and open Digital Library.
+5. On the new computer: **Settings → Restore from backup…** and choose the file.
+
+Everything is transferred: members, history, rate card, computers, settings, **and the login username and password**. After restoring, sign in with the password you used on the old computer.
 
 ### Restoring
 
@@ -259,7 +273,7 @@ Everything is transferred: members, history, rate card, computers, settings, **a
 - A safety copy of the current data is saved first (`library-before-restore-<date>.db`), so a restore can be undone by restoring that file.
 - Files that aren't a valid, undamaged Digital Library backup are rejected.
 
-**Manual method** (no app needed): stop the app (**Settings → Stop Digital Library**), then copy the backup into `~/Library/Application Support/DigitalLibrary/` and rename it to `library.db`, replacing the existing file. Also delete `library.db-wal` and `library.db-shm` if present, then start the app.
+**Manual method** (no app needed): quit the app, then copy the backup into the data folder (see the table above) and rename it to `library.db`, replacing the existing file. Also delete `library.db-wal` and `library.db-shm` if present, then start the app.
 
 ---
 
@@ -270,14 +284,12 @@ Everything is transferred: members, history, rate card, computers, settings, **a
 | Forgot the password | On the sign-in page, click **Forgot or want to reset the password?** and use the default password `Admin@123` as the current password. |
 | "Too many failed attempts" | Wait 60 seconds, then try again. |
 | "Your session has ended. Please sign in again." | You were inactive for 12 hours, the app was restarted, the password was changed elsewhere, or data was restored. Sign in again. |
-| Can't sign in after restoring a backup | Use the password from the Mac the backup came from, or reset it with the default password. |
-| "Digital Library can't be opened because it is from an unidentified developer" | Right-click the app, choose **Open**, then **Open** again. Or use **System Settings → Privacy & Security → Open Anyway**. |
-| Nothing seems to happen when I open the app | It runs in the background (no Dock icon). Look for a new browser tab, or browse to `http://127.0.0.1:8765/`. |
-| Browser shows "can't connect" | The app isn't running. Open it again from Applications. |
-| Page says "Cannot reach the Digital Library server" | The app was stopped. Open it again; the page reloads normally. |
-| Port 8765 is used by another program | The app automatically uses the next free port (8766–8784). The browser opens the right address. Check the log for the address used. |
-| Need to force-quit | Open **Activity Monitor**, search `DigitalLibrary`, and quit it. Or run `pkill -x DigitalLibrary` in Terminal. Data is safe. |
-| Something went wrong | See `~/Library/Logs/DigitalLibrary.log`. |
+| Can't sign in after restoring a backup | Use the password from the computer the backup came from, or reset it with the default password. |
+| "Digital Library can't be opened because it is from an unidentified developer" (macOS) | Right-click the app, choose **Open**, then **Open** again. Or use **System Settings → Privacy & Security → Open Anyway**. |
+| "Windows protected your PC" | Click **More info → Run anyway**. |
+| Windows: the window is blank or the app doesn't start | Microsoft Edge WebView2 is missing. Run the `setup.exe` installer once while online, or install "WebView2 Runtime" from Microsoft. |
+| Opening the app again doesn't open a second window | That's intended. Only one copy runs, and its window is brought to the front. |
+| Need to force-quit | macOS: **Activity Monitor**, search `DigitalLibrary`, and quit it. Windows: **Task Manager**, end `DigitalLibrary.exe`. Data is safe. |
 | "A member with this ID number already exists" | ID numbers must be unique. Search for the existing member instead. |
 | Can't delete a member | Members with session history can't be deleted, to keep financial records intact. Edit their details instead. |
 
@@ -285,23 +297,27 @@ Everything is transferred: members, history, rate card, computers, settings, **a
 
 ## Uninstalling
 
-1. Stop the app (**Settings → Stop Digital Library**).
+**macOS**
+1. Quit the app.
 2. Drag **Digital Library** from **Applications** to the Trash.
-3. *Optional, deletes all data permanently:* delete `~/Library/Application Support/DigitalLibrary/`. Download a backup first if you might need it.
-4. *Optional:* delete `~/Library/Logs/DigitalLibrary.log`.
-5. *Optional, if installed with the `.pkg`:* run `sudo pkgutil --forget local.digitallibrary.app` in Terminal.
+3. *Optional, deletes all data permanently:* delete `~/Library/Application Support/DigitalLibrary/`. Save a backup first if you might need it.
+4. *Optional, if installed with the `.pkg`:* run `sudo pkgutil --forget com.digitallibrary.desktop` in Terminal.
+
+**Windows**
+1. Quit the app.
+2. **Settings → Apps → Installed apps → Digital Library → Uninstall**. For the portable zip, just delete the folder.
+3. *Optional, deletes all data permanently:* delete `%APPDATA%\DigitalLibrary`. Save a backup first if you might need it.
 
 ---
 
 ## Privacy and security
 
-- **Offline:** the app makes no internet connections and loads no external resources (fonts, scripts, analytics).
-- **Local only:** the server listens on `127.0.0.1`, so other computers on the network **can't** connect to it.
-- **Sign-in required:** every data request needs a signed-in session. Passwords are hashed with PBKDF2-SHA256 (600,000 iterations, random salt). Sessions use a random token in an `HttpOnly`, `SameSite=Strict` cookie, expire after 12 hours of inactivity, and are cleared when the app restarts. Repeated wrong passwords trigger a 60-second lockout.
-- **Default-password reset:** by design, the default password `Admin@123` can always be used to reset the password. This protects against being locked out, but means anyone who knows it and can use this Mac can take over the account.
-- **Protected against malicious websites:** requests must come from the app's own page. The server checks the `Host` and `Origin` headers, requires JSON or binary content types (which forces browser CORS checks), and sends a strict Content-Security-Policy.
+- **Offline and no network port:** the app makes no internet connections, loads no external resources, and doesn't listen on any network port. The window talks to the app's built-in logic directly, so nothing else on the computer or network can connect to it.
+- **Locked-down window:** a strict Content-Security-Policy allows only the app's own files. The window may only call the app's own commands; all other system access is disabled. File save and open dialogs are opened by the app itself, never by the page.
+- **Sign-in required:** every data action needs a signed-in user. Passwords are hashed with PBKDF2-SHA256 (600,000 iterations, random salt). Sign-in lasts until you log out, quit the app, or are inactive for 12 hours. Repeated wrong passwords trigger a 60-second lockout.
+- **Default-password reset:** by design, the default password `Admin@123` can always be used to reset the password. This protects against being locked out, but means anyone who knows it and can use this computer can take over the account.
 - **Safe data handling:** all database queries are parameterized, input is validated, page content is HTML-escaped, and CSV exports are protected against spreadsheet formula injection.
-- **Personal data:** member details are stored unencrypted in the database file on your Mac. Protect the Mac with a login password and FileVault, and keep backup files private.
+- **Personal data:** member details are stored unencrypted in the database file on your computer. Protect the computer with a login password and disk encryption (FileVault on macOS, BitLocker on Windows), and keep backup files private.
 
 ---
 
@@ -309,115 +325,117 @@ Everything is transferred: members, history, rate card, computers, settings, **a
 
 ### Technology
 
-- **Backend:** Python standard library only (`http.server`, `sqlite3`). No third-party packages.
-- **Frontend:** plain HTML, CSS and JavaScript. No frameworks, build step or CDN.
-- **Database:** SQLite in WAL mode.
-- **Packaging:** PyInstaller embeds Python into the `.app`. `pkgbuild`/`productbuild`, `hdiutil` and `ditto` (built into macOS) create the `.pkg`, `.dmg` and `.zip`.
+- **App shell:** [Tauri 2](https://tauri.app). It uses the system's built-in web engine: WebKit on macOS, Edge WebView2 on Windows. That's why the app is only a few MB.
+- **Backend:** Rust (`src-tauri/`), with SQLite (bundled `rusqlite`) and PBKDF2 password hashing. The database format and password hashes are compatible with the earlier Python version.
+- **Frontend:** plain HTML, CSS and JavaScript (`ui/`). No frameworks, bundler or CDN.
+- **Packaging:** Tauri builds the `.app`, `.dmg`, NSIS `setup.exe` and `.msi`. `scripts/make_pkg.sh` wraps the Mac app in a `.pkg`.
 
 ### Project structure
 
 ```
 .
-├── library_app/
-│   ├── server.py            # Backend: HTTP server, REST API, billing, SQLite
-│   └── static/
-│       ├── index.html       # Single-page UI
-│       ├── app.js           # UI logic
-│       └── app.css          # Styles (incl. receipt print styles)
-├── installer/
-│   ├── welcome.html         # .pkg welcome screen
-│   ├── conclusion.html      # .pkg final screen
-│   └── scripts/preinstall   # Stops a running copy before upgrading
-├── build_release.sh         # Builds the self-contained .app + .pkg + .dmg + .zip into dist/
-├── DigitalLibrary.spec      # PyInstaller configuration
-├── make_icon.py             # Generates the app icon (.png / .icns)
-├── build_mac_app.sh         # Quick dev build that uses the Mac's installed Python
-├── Start Digital Library.command  # Run from source by double-clicking
-├── build/                   # Build intermediates (safe to delete)
-└── dist/                    # Release output
+├── ui/                      # The app's screens (loaded into the native window)
+│   ├── index.html
+│   ├── app.js               # UI logic; calls the backend via Tauri's invoke()
+│   └── app.css              # Styles (incl. receipt print styles)
+├── src-tauri/
+│   ├── src/
+│   │   ├── main.rs          # App start-up, window, single-instance, the `api` command
+│   │   ├── routes.rs        # All features: sign-in, members, sessions, billing, reports, files (+ tests)
+│   │   ├── db.rs            # SQLite schema, start-up, query helpers
+│   │   ├── util.rs          # Validation, time, money rounding, password hashing
+│   │   └── error.rs         # Error type returned to the UI
+│   ├── tauri.conf.json      # App name, version, window, security policy, installer settings
+│   ├── capabilities/        # What the window is allowed to call
+│   ├── icons/               # Generated app icons (Mac .icns, Windows .ico, PNGs)
+│   └── Cargo.toml           # Rust dependencies
+├── scripts/
+│   ├── build.sh             # Builds the app and collects installers into dist/
+│   └── make_pkg.sh          # Wraps the Mac app in a .pkg installer
+├── installer/               # .pkg welcome/finish screens and pre-install script
+├── make_icon.py             # Draws the 1024px source icon
+├── package.json             # Tauri command-line tool
+└── .github/workflows/build.yml   # Automatic Mac + Windows builds
 ```
 
-### Running from source
+### Prerequisites
 
-Requires Python 3.9+.
+- [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) 20+.
+- macOS: Xcode Command Line Tools (`xcode-select --install`).
+- Windows: Microsoft C++ Build Tools ("Desktop development with C++") and WebView2 (preinstalled on Windows 10/11).
+
+Then install the Tauri command-line tool once:
 
 ```bash
-python3 library_app/server.py               # starts and opens the browser
-python3 library_app/server.py --no-browser  # starts without opening the browser
+npm install
 ```
 
-You can also double-click **Start Digital Library.command**. Press `Ctrl+C` to stop.
-
-### Configuration (environment variables)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `LIBRARY_PORT` | `8765` | First port to try (the next 19 are tried if busy). |
-| `LIBRARY_DATA_DIR` | `~/Library/Application Support/DigitalLibrary` | Folder for `library.db`. Use a temporary folder for testing. |
-| `LIBRARY_DEBUG` | *(unset)* | Set to any value to log every HTTP request. |
-
-Example test run with throwaway data:
+### Running during development
 
 ```bash
-LIBRARY_DATA_DIR=/tmp/dl-test LIBRARY_PORT=8799 python3 library_app/server.py --no-browser
+npm run dev
 ```
+
+This opens the app with live reload of the files in `ui/`. To use throwaway data instead of your real database, set `LIBRARY_DATA_DIR`:
+
+```bash
+LIBRARY_DATA_DIR=/tmp/dl-test npm run dev
+```
+
+### Tests
+
+```bash
+cargo test --release --manifest-path src-tauri/Cargo.toml
+```
+
+The tests check:
+
+- billing results, which must match the original Python version exactly
+- money rounding
+- that password hashes created by the Python version are accepted
+- a full desk workflow: sign-in, members, check-in and check-out, reports, the rate card, and password change and reset
+- the lockout after failed sign-ins
+- backup restore, including imported credentials and rejected files
 
 ### Building a release
 
 ```bash
-./build_release.sh
+npm run build                                   # this computer's platform
+TARGET=universal-apple-darwin npm run build     # macOS, Intel + Apple Silicon (rustup target add x86_64-apple-darwin first)
+APP_VERSION=1.1.0 npm run build                 # override the version
 ```
 
-This creates a build environment in `build/venv` and installs PyInstaller (the first run needs internet). It then generates the icon, builds the app, verifies its code signature, and writes to `dist/`:
+Installers are written to `dist/`:
 
-- `Digital Library.app`: self-contained app (about 22 MB)
-- `DigitalLibrary-<version>-<arch>.pkg`: installer to `/Applications`
-- `DigitalLibrary-<version>-<arch>.dmg`: drag-to-install disk image
-- `DigitalLibrary-<version>-<arch>.zip`: zipped app (created with `ditto` to preserve symlinks and signature)
+- macOS: `.dmg`, `.pkg`, `.zip`
+- Windows: `-setup.exe`, `.msi`, `-portable.zip`
 
-Set the version with `APP_VERSION=1.1.0 ./build_release.sh`. Also update `VERSION` in `library_app/server.py`.
-
-After any code change, run `./build_release.sh` again.
-
-#### Building for Intel and Apple Silicon (universal2)
-
-The default build matches the building Mac's architecture. Homebrew Python is single-architecture, so for a universal build install Python from [python.org](https://www.python.org/downloads/macos/), which is universal2, and run:
-
-```bash
-PYTHON=/usr/local/bin/python3 TARGET_ARCH=universal2 ./build_release.sh
-```
-
-If you reuse `build/venv`, delete it first so it's recreated with the new Python.
+The version comes from `src-tauri/tauri.conf.json`. It's also shown in **Settings → About**. Windows installers can only be built on Windows, which the GitHub workflow does for you.
 
 #### Signing and notarization
 
-To avoid the security prompt on other Macs, you need an Apple Developer account with **Developer ID Application** and **Developer ID Installer** certificates:
+Without paid certificates, users see a one-time security prompt (see [First launch](#first-launch-security-prompt)). To remove it:
 
-```bash
-SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-INSTALLER_SIGN_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
-./build_release.sh
-
-xcrun notarytool submit dist/DigitalLibrary-1.0.0-arm64.pkg \
-  --apple-id you@example.com --team-id TEAMID --password <app-specific-password> --wait
-xcrun stapler staple dist/DigitalLibrary-1.0.0-arm64.pkg
-```
-
-#### Quick development build
-
-`./build_mac_app.sh` creates a lightweight `Digital Library.app` in the project folder that runs the source with the Mac's installed Python. `--install` also copies it to `~/Applications`. Use it only for development; it doesn't work on Macs without Python.
+- **macOS:** you need an Apple Developer account with **Developer ID Application** and **Developer ID Installer** certificates. Set `bundle.macOS.signingIdentity` in `tauri.conf.json` and `INSTALLER_SIGN_IDENTITY` for the `.pkg`, then notarize:
+  ```bash
+  xcrun notarytool submit dist/DigitalLibrary-<version>-macos-universal.pkg \
+    --apple-id you@example.com --team-id TEAMID --password <app-specific-password> --wait
+  xcrun stapler staple dist/DigitalLibrary-<version>-macos-universal.pkg
+  ```
+- **Windows:** buy a code-signing certificate (OV or EV) and configure `bundle.windows.certificateThumbprint` (or `signCommand`) in `tauri.conf.json`.
 
 ### Automatic builds (GitHub Actions)
 
-[.github/workflows/build.yml](.github/workflows/build.yml) rebuilds the app on a GitHub macOS runner for every push to any branch, every pull request, or manually (**Actions → Build macOS app → Run workflow**).
+[.github/workflows/build.yml](.github/workflows/build.yml) runs for every push to any branch, every pull request, or manually (**Actions → Build desktop app → Run workflow**). It builds on two machines in parallel:
 
-Each run:
+| Runner | Builds |
+|---|---|
+| macOS | Universal (Intel + Apple Silicon) `.dmg`, `.pkg`, `.zip` |
+| Windows | `setup.exe`, `.msi`, portable `.zip` |
 
-1. Builds the `.app`, `.pkg`, `.dmg` and `.zip` with `./build_release.sh`.
-2. Smoke-tests the built app: it starts the app, loads the page, checks that data requires sign-in, signs in with the default credentials, and stops the app.
-3. Uploads the `.pkg`, `.dmg` and `.zip` as a downloadable **artifact**. Open the run on the **Actions** tab, then **Artifacts**. Artifacts are kept for 30 days.
+Each runner first runs the backend tests, then builds and uploads its installers as a downloadable **artifact**. Open the run on the **Actions** tab, then **Artifacts**. Artifacts are kept for 30 days.
 
-**Publishing a release:** push a version tag, and the workflow also creates a GitHub Release with the installers attached. The version number comes from the tag.
+**Publishing a release:** push a version tag. When both builds succeed, a GitHub Release is created with all the Mac and Windows installers attached. The version shown in the app and in file names comes from the tag.
 
 ```bash
 git tag v1.0.1
@@ -437,27 +455,30 @@ git push origin v1.0.1
 
 - Each session stores a **snapshot** of the plan and tax at check-in (`plan_name`, `rate_per_hour`, `minimum_minutes`, `increment_minutes`, `max_charge`, `tax_percent`, `computer_name`). Later rate-card changes therefore never alter running or past sessions.
 - Partial unique indexes allow only **one active session per member** and **per computer**.
-- Times are stored as UTC ISO-8601 (`2026-10-27T17:30:00Z`) and shown in the Mac's local time.
+- Times are stored as UTC ISO-8601 (`2026-10-27T17:30:00Z`) and shown in the computer's local time.
 - Tables are created automatically on startup (`CREATE TABLE IF NOT EXISTS`). Starter data is inserted only on the very first run.
 
 ---
 
-## API reference
+## Internal API reference
 
-All endpoints are served at `http://127.0.0.1:<port>`.
+There's no web server. The UI calls a single Tauri command, `api`, with a method, a path and an optional JSON body. The paths are the same as in the earlier HTTP version:
 
-- Request and response bodies are JSON, unless noted otherwise.
-- `POST`/`PUT` requests must send `Content-Type: application/json`.
-- All endpoints except `/api/health` and `/api/auth/*` require a signed-in session: the `dl_session` cookie from `/api/auth/login`.
-- Errors return `{"error": "message"}` with an HTTP status: `400` invalid input, `401` not signed in or wrong password, `404` not found, `409` conflict, `415` wrong content type, `429` too many failed sign-ins.
+```js
+await window.__TAURI__.core.invoke("api", { method: "GET", path: "/api/members?q=asha", body: null });
+```
+
+- On success the command returns JSON.
+- On failure it rejects with `{status, error}`. The status codes follow HTTP conventions: `400` invalid input, `401` not signed in or wrong password, `404` not found, `409` conflict, `429` too many failed sign-ins.
+- Everything except `/api/health` and `/api/auth/*` requires a signed-in user.
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/health` | `{"app": "digital-library", "version": "..."}` |
 | GET | `/api/auth/status` | `{"authenticated", "username", "default_password", "library_name"}` |
-| POST | `/api/auth/login` | `username`, `password`. Sets the session cookie |
-| POST | `/api/auth/logout` | Ends the session |
-| POST | `/api/auth/change-password` | `current_password` (current **or** default), `new_password`, plus `username` when not signed in. Ends other sessions |
+| POST | `/api/auth/login` | `username`, `password` |
+| POST | `/api/auth/logout` | Signs out |
+| POST | `/api/auth/change-password` | `current_password` (current **or** default), `new_password`, plus `username` when not signed in |
 | GET | `/api/dashboard` | Live counts and today's totals |
 | GET / PUT | `/api/settings` | Read / update `library_name`, `currency`, `tax_percent` |
 | GET | `/api/members?q=&limit=` | List / search members (includes `visits`, `total_spent`, `active_session_id`) |
@@ -474,8 +495,8 @@ All endpoints are served at `http://127.0.0.1:<port>`.
 | POST | `/api/sessions/{id}/checkout` | `payment_method`, optional `discount`, `notes`. Returns the completed session |
 | POST | `/api/sessions/{id}/cancel` | End without charge |
 | GET | `/api/reports?from=&to=` | Summary and breakdowns (filter on check-out time) |
-| GET | `/api/export/members.csv` | Members CSV |
-| GET | `/api/export/sessions.csv?…` | Sessions CSV (same filters as `/api/sessions`) |
-| GET | `/api/backup` | Download the SQLite database |
-| POST | `/api/restore` | Upload a backup (`Content-Type: application/octet-stream`). Replaces all data, including credentials, after saving a safety copy, then signs everyone out |
-| POST | `/api/shutdown` | Stop the server |
+| POST | `/api/export/members` | Shows a Save dialog and writes the members CSV. Returns `{saved}` or `{cancelled}` |
+| POST | `/api/export/sessions?…` | Same for sessions (same filters as `/api/sessions`) |
+| POST | `/api/backup` | Shows a Save dialog and writes a copy of the database |
+| POST | `/api/restore` | Shows an Open dialog, validates the file, saves a safety copy, replaces all data (including credentials), then signs out |
+| POST | `/api/print` | Opens the system print dialog for the receipt |

@@ -1,4 +1,4 @@
-name: Build macOS app
+name: Build desktop app
 
 on:
   push:
@@ -16,42 +16,66 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-latest
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            os: macos-latest
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            artifacts: |
+              dist/*.dmg
+              dist/*.pkg
+              dist/*.zip
+          - platform: Windows
+            os: windows-latest
+            target: ""
+            rust_targets: ""
+            artifacts: |
+              dist/*.exe
+              dist/*.msi
+              dist/*.zip
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.13"
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Tauri CLI
+        run: npm ci
 
       - name: Use tag as version
         if: startsWith(github.ref, 'refs/tags/v')
         run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Build app, installer, disk image and zip
-        run: ./build_release.sh
+      - name: Test backend (billing, sign-in, workflow, restore)
+        run: cargo test --release --manifest-path src-tauri/Cargo.toml
 
-      - name: Smoke test the built app
-        run: |
-          set -euo pipefail
-          URL=http://127.0.0.1:8799
-          LIBRARY_DATA_DIR="$(mktemp -d)" LIBRARY_PORT=8799 \
-            "dist/Digital Library.app/Contents/MacOS/DigitalLibrary" --no-browser &
-          for _ in $(seq 1 30); do curl -sf "$URL/api/health" && break; sleep 1; done
-          curl -sf -o /dev/null "$URL/"
-          test "$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/members")" = 401
-          curl -sf -c cookies.txt -H 'Content-Type: application/json' \
-            -d '{"username":"admin","password":"Admin@123"}' "$URL/api/auth/login"
-          curl -sf -b cookies.txt -o /dev/null "$URL/api/members"
-          curl -sf -b cookies.txt -X POST -H 'Content-Type: application/json' -d '{}' "$URL/api/shutdown"
+      - name: Build app and installers
+        env:
+          TARGET: ${{ matrix.target }}
+        run: ./scripts/build.sh
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DigitalLibrary-${{ env.APP_VERSION || 'build' }}-${{ github.run_number }}
-          path: |
-            dist/*.pkg
-            dist/*.dmg
-            dist/*.zip
+          name: DigitalLibrary-${{ matrix.platform }}-${{ env.APP_VERSION || 'build' }}-${{ github.run_number }}
+          path: ${{ matrix.artifacts }}
           if-no-files-found: error
           retention-days: 30
 

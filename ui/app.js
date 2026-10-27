@@ -45,7 +45,7 @@ function debounce(fn, ms = 250) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
-// Mirrors server-side compute_bill(); used for live estimates only.
+// Mirrors the backend's compute_bill(); used for live estimates only.
 function priceFor(plan, usedMinutes, taxPercent) {
   const step = Math.max(1, Number(plan.increment_minutes) || 1);
   const billable = Math.max(Math.ceil(usedMinutes / step) * step, Number(plan.minimum_minutes) || 0);
@@ -67,24 +67,23 @@ function billingRule(p) {
 }
 
 async function api(path, { method = "GET", body } = {}) {
-  const opts = { method, headers: {} };
-  if (method !== "GET") {
-    opts.headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body ?? {});
-  }
-  let res;
   try {
-    res = await fetch(path, opts);
-  } catch {
-    throw new Error("Cannot reach the Digital Library server. Is it running?");
+    return await window.__TAURI__.core.invoke("api", { method, path, body: body ?? null });
+  } catch (e) {
+    const err = e && typeof e === "object" ? e : { status: 500, error: String(e) };
+    if (err.status === 401 && !path.startsWith("/api/auth/")) {
+      showAuth("Your session has ended. Please sign in again.");
+      throw new Error("Please sign in.");
+    }
+    throw new Error(err.error || "Something went wrong.");
   }
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && !path.startsWith("/api/auth/")) {
-    showAuth("Your session has ended. Please sign in again.");
-    throw new Error("Please sign in.");
-  }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
+}
+
+async function saveFile(path, what) {
+  await guard(async () => {
+    const res = await api(path, { method: "POST" });
+    if (res.saved) toast(`${what} saved to ${res.saved}`);
+  });
 }
 
 function toast(message, kind = "success") {
@@ -115,7 +114,10 @@ function field(name, label, value = "", { type = "text", required = false, attrs
 
 // ------------------------------------------------------------ modal
 
-function openModal({ title, body, footer = "", wide = false }) {
+let onModalClose = null;
+
+function openModal({ title, body, footer = "", wide = false, onClose = null }) {
+  closeModal();
   const root = $("#modal-root");
   root.innerHTML = `
     <div class="overlay">
@@ -130,9 +132,29 @@ function openModal({ title, body, footer = "", wide = false }) {
   $(".overlay", root).addEventListener("mousedown", (e) => { if (e.target.classList.contains("overlay")) closeModal(); });
   const first = $$("input:not([type=hidden]), select, textarea", modal).find((el) => el.offsetParent !== null);
   if (first) first.focus();
+  onModalClose = onClose;
   return modal;
 }
-function closeModal() { $("#modal-root").innerHTML = ""; }
+function closeModal() {
+  $("#modal-root").innerHTML = "";
+  const callback = onModalClose;
+  onModalClose = null;
+  if (callback) callback();
+}
+
+// In-app replacement for window.confirm, which desktop webviews don't reliably support.
+function confirmDialog(message, { confirmText = "Confirm", danger = false } = {}) {
+  return new Promise((resolve) => {
+    const modal = openModal({
+      title: "Please confirm",
+      body: `<p class="confirm-text">${esc(message)}</p>`,
+      footer: `<button class="btn" data-close>Cancel</button><button class="btn ${danger ? "danger" : "primary"}" id="confirmOk">${esc(confirmText)}</button>`,
+      onClose: () => resolve(false),
+    });
+    $("#confirmOk", modal).onclick = () => { resolve(true); closeModal(); };
+    $("#confirmOk", modal).focus();
+  });
+}
 function showFormError(modal, message) {
   const el = $(".form-error", modal);
   if (el) { el.textContent = message; el.classList.remove("info"); el.hidden = false; } else toast(message, "error");
@@ -206,7 +228,7 @@ function tickActive() {
 }
 
 async function cancelSession(id) {
-  if (!confirm("Cancel this session without charging? This cannot be undone.")) return;
+  if (!(await confirmDialog("Cancel this session without charging? This cannot be undone.", { confirmText: "Cancel session", danger: true }))) return;
   await guard(async () => {
     await api(`/api/sessions/${id}/cancel`, { method: "POST" });
     toast("Session cancelled.");
@@ -419,7 +441,7 @@ function showReceipt(s) {
       </div>`,
     footer: `<button class="btn" data-close>Close</button><button class="btn primary" id="btnPrint">Print receipt</button>`,
   });
-  $("#btnPrint", modal).onclick = () => window.print();
+  $("#btnPrint", modal).onclick = () => guard(() => api("/api/print", { method: "POST" }));
 }
 
 async function openReceipt(id) {
@@ -515,7 +537,7 @@ async function openMemberHistory(member) {
 }
 
 async function deleteMember(member) {
-  if (!confirm(`Delete ${fullName(member)}? This cannot be undone.`)) return;
+  if (!(await confirmDialog(`Delete ${fullName(member)}? This cannot be undone.`, { confirmText: "Delete", danger: true }))) return;
   await guard(async () => {
     await api(`/api/members/${member.id}`, { method: "DELETE" });
     toast("Member deleted.");
@@ -681,7 +703,7 @@ function openRateForm(rate = null) {
 }
 
 async function deleteRate(rate) {
-  if (!confirm(`Delete rate plan "${rate.name}"? Past receipts keep their original price.`)) return;
+  if (!(await confirmDialog(`Delete rate plan "${rate.name}"? Past receipts keep their original price.`, { confirmText: "Delete", danger: true }))) return;
   await guard(async () => {
     await api(`/api/rates/${rate.id}`, { method: "DELETE" });
     toast("Rate plan deleted.");
@@ -737,7 +759,7 @@ function openComputerForm(pc = null) {
 }
 
 async function deleteComputer(pc) {
-  if (!confirm(`Delete ${pc.name}? Past sessions keep its name.`)) return;
+  if (!(await confirmDialog(`Delete ${pc.name}? Past sessions keep its name.`, { confirmText: "Delete", danger: true }))) return;
   await guard(async () => {
     await api(`/api/computers/${pc.id}`, { method: "DELETE" });
     toast("Computer deleted.");
@@ -905,7 +927,8 @@ function init() {
   ["#hFrom", "#hTo", "#hStatus"].forEach((s) => $(s).addEventListener("change", () => guard(loadHistory)));
   $("#hSearch").addEventListener("input", debounce(() => guard(loadHistory)));
   $("#hReset").onclick = () => { ["#hFrom", "#hTo", "#hStatus", "#hSearch"].forEach((s) => { $(s).value = ""; }); guard(loadHistory); };
-  $("#btnExportSessions").onclick = () => { location.href = `/api/export/sessions.csv?${historyParams()}`; };
+  $("#btnExportSessions").onclick = () => saveFile(`/api/export/sessions?${historyParams()}`, "Sessions");
+  $("#btnExportMembers").onclick = () => saveFile("/api/export/members", "Members");
 
   $$("#rPresets button").forEach((b) => (b.onclick = () => guard(() => setReportPreset(b.dataset.preset))));
   $("#rApply").onclick = () => { $$("#rPresets button").forEach((b) => b.classList.remove("active")); guard(loadReports); };
@@ -927,25 +950,16 @@ function init() {
       loadSettings();
     });
   });
-  $("#btnRestore").onclick = () => $("#restoreFile").click();
-  $("#restoreFile").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
-    if (!confirm(`Replace ALL current data with "${file.name}"?\n\nA copy of the current data is saved first, so this can be undone.`)) return;
+  $("#btnBackup").onclick = () => saveFile("/api/backup", "Backup");
+  $("#btnExportMembersAll").onclick = () => saveFile("/api/export/members", "Members");
+  $("#btnExportSessionsAll").onclick = () => saveFile("/api/export/sessions", "Sessions");
+  $("#btnRestore").onclick = async () => {
+    const message = "Replace ALL current data, including the login password, with a backup file?\n\nA copy of the current data is saved first, so this can be undone.";
+    if (!(await confirmDialog(message, { confirmText: "Choose backup file…", danger: true }))) return;
     await guard(async () => {
-      const res = await fetch("/api/restore", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Restore failed (${res.status})`);
-      showAuth(`Restored ${data.members} member(s) and ${data.sessions} session(s). Sign in with the username and password from the backup.`, true);
-    });
-  });
-  $("#btnShutdown").onclick = async () => {
-    if (state.active.length && !confirm(`${state.active.length} member(s) are still checked in. Their timers keep running and they can be checked out after restart. Stop anyway?`)) return;
-    if (!confirm("Stop the Digital Library server? Open it again from the app to restart.")) return;
-    await guard(async () => {
-      await api("/api/shutdown", { method: "POST" });
-      document.body.innerHTML = `<div class="stopped"><h1>Digital Library has stopped.</h1><p>You can close this tab. Launch the app again to restart.</p></div>`;
+      const res = await api("/api/restore", { method: "POST" });
+      if (res.cancelled) return;
+      showAuth(`Restored ${res.members} member(s) and ${res.sessions} session(s). Sign in with the username and password from the backup.`, true);
     });
   };
 
