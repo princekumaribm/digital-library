@@ -46,7 +46,12 @@ rm -rf "$STAGE" "$DMG"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -quiet -volname "Digital Library" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+# hdiutil intermittently fails with "Resource busy" on CI runners.
+for attempt in 1 2 3; do
+  hdiutil create -quiet -volname "Digital Library" -srcfolder "$STAGE" -ov -format UDZO "$DMG" && break
+  [ "$attempt" -lt 3 ] || exit 1
+  sleep 5
+done
 rm -rf "$STAGE"
 
 echo "==> Creating installer package"

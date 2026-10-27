@@ -407,6 +407,23 @@ xcrun stapler staple dist/DigitalLibrary-1.0.0-arm64.pkg
 
 `./build_mac_app.sh` creates a lightweight `Digital Library.app` in the project folder that runs the source with the Mac's installed Python. `--install` also copies it to `~/Applications`. Use it only for development; it doesn't work on Macs without Python.
 
+### Automatic builds (GitHub Actions)
+
+[.github/workflows/build.yml](.github/workflows/build.yml) rebuilds the app on a GitHub macOS runner for every push to any branch, every pull request, or manually (**Actions → Build macOS app → Run workflow**).
+
+Each run:
+
+1. Builds the `.app`, `.pkg`, `.dmg` and `.zip` with `./build_release.sh`.
+2. Smoke-tests the built app: it starts the app, loads the page, checks that data requires sign-in, signs in with the default credentials, and stops the app.
+3. Uploads the `.pkg`, `.dmg` and `.zip` as a downloadable **artifact**. Open the run on the **Actions** tab, then **Artifacts**. Artifacts are kept for 30 days.
+
+**Publishing a release:** push a version tag, and the workflow also creates a GitHub Release with the installers attached. The version number comes from the tag.
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
 ### Database schema
 
 | Table | Purpose | Key columns |
