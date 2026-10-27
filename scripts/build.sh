@@ -37,7 +37,9 @@ case "$(uname -s)" in
     NAME="DigitalLibrary-$VERSION-windows-x64"
     cp "$BUNDLE"/nsis/*-setup.exe "dist/$NAME-setup.exe"
     cp "$BUNDLE"/msi/*.msi "dist/$NAME.msi"
-    powershell -NoProfile -Command "Compress-Archive -Force -Path '$OUT/DigitalLibrary.exe' -DestinationPath 'dist/$NAME-portable.zip'"
+    # PowerShell needs a Windows path, not Git Bash's /d/... form.
+    EXE="$(cygpath -w "$OUT/DigitalLibrary.exe")"
+    powershell -NoProfile -Command "Compress-Archive -Force -Path '$EXE' -DestinationPath 'dist/$NAME-portable.zip'"
     ;;
   *)
     cp -R "$BUNDLE"/. dist/
