@@ -30,14 +30,15 @@ It's a native desktop app for **macOS and Windows**: double-click it and it open
 |---|---|
 | **Sign-in** | Username/password sign-in page. Change the password in Settings, or reset it from the sign-in page using the current **or** default password. Credentials are included in backups. |
 | **Members** | Register members with first name, last name, email, phone and ID number (unique). Search, edit, delete, and view each member's visit history and total spend. |
-| **Check-in** | Search a member (or register a new one on the spot), pick a computer and rate plan, and start the session. A member can't be checked in twice, and a computer can't be used by two people at once. |
+| **Check-in** | Search a member (or register a new one on the spot) and start the session. The device defaults to **Own laptop**; click **Change** to pick a library computer. A member can't be checked in twice, and a computer can't be used by two people at once. |
+| **Monthly passes** | Sell passes such as "1 hr/day" or "2 hrs/day" for 30 days. Each pass is a pool of hours (hours per day × days) usable on any day. See hours used and left per member. The rate plan's minimum (e.g. 30 min) and rounding also apply to pass usage; time the pass can't cover is charged at the normal rate. |
 | **Live dashboard** | See who is checked in, on which computer, with a live timer and the amount owed so far. Also shows today's revenue, check-ins, usage time and free computers. |
 | **Check-out** | Shows the full bill: time used, billable time, subtotal, discount, tax and total. Pick a payment method (Cash, Card, UPI, Bank transfer, Other) and get a printable receipt. |
 | **Rate card** | Create multiple plans (e.g. Standard, Student, Senior Citizen) with hourly rate, minimum charge, rounding increment and optional maximum charge. Choose the default plan, set tax % and currency, and use the built-in price calculator. |
 | **History** | Every session with filters (date range, status, search), receipts, and CSV export. |
 | **Reports** | Revenue, sessions, usage time, average bill, discounts and tax for any date range, broken down by day, payment method, rate plan and top members. |
 | **Computers** | Add, rename, disable or remove workstations, and see at a glance which are free or in use. |
-| **Settings** | Library name (shown on receipts), password change, save and restore backups, and CSV exports. |
+| **Settings** | Library name, address, phone and email (printed on receipts with the logo), password change, save and restore backups, and CSV exports. |
 
 ---
 
@@ -142,7 +143,7 @@ Password rules: at least 8 characters, including at least one letter and one num
 The app starts with sample settings. Adjust them before using it:
 
 1. **Sign in** with `admin` / `Admin@123`, then change the password in **Settings → Account & password**.
-2. **Settings → General:** set your **library name** (printed on receipts and the sign-in page).
+2. **Settings → Library details:** check the **library name**, **address**, **phone** and **email**. They're printed on every receipt under the logo. Defaults: Shivam Digital Library, Ordely Bazar, Varanasi, ssetpamgs@gmail.com.
 3. **Rate Card → Tax & currency:** set the **tax %** and **currency symbol** (default `₹`, tax 0%).
 4. **Rate Card:** edit or replace the starter plans:
 
@@ -152,7 +153,8 @@ The app starts with sample settings. Adjust them before using it:
    | Student | ₹40 | 30 min | 15 min |
    | Senior Citizen | ₹30 | 15 min | 15 min |
 
-4. **Computers:** rename or add workstations. The starters are `PC-01` to `PC-06` in "Main hall".
+5. **Passes → Pass plans:** set your monthly pass prices. The starters are "Monthly – 1 hr/day" (₹600) and "Monthly – 2 hrs/day" (₹1,000), both valid for 30 days.
+6. **Computers:** rename or add workstations. The starters are `PC-01` to `PC-06` in "Main hall". Members using their own laptop don't need a computer.
 
 ### Registering a member
 
@@ -169,10 +171,12 @@ You can also register a new member directly from the check-in window.
 
 1. Click **+ New check-in** on the Dashboard. You can also click **Check in** next to a member, or **Check in here** on a computer card.
 2. Search the member by name, ID number, phone or email, and select them.
-3. Choose a **computer** (only free ones are listed) and a **rate plan** (the default plan is pre-selected).
-4. Optionally add a note, then click **Check in**.
+3. If the member has a valid pass with hours left, **Use pass** is ticked automatically, showing the hours left and the expiry date. Untick it to bill this visit normally.
+4. **Device** is **Own laptop** by default. If the member uses a library computer, click **Change** and pick one (only free computers are listed).
+5. Check the **rate plan** (the default is pre-selected). It's used for normal billing, and for any time beyond the pass.
+6. Optionally add a note, then click **Check in**.
 
-The member now appears on the Dashboard with a live timer and running amount.
+The member now appears on the Dashboard with a live timer and running amount. Pass members also show their hours left, counting down.
 
 ### Checking out
 
@@ -182,6 +186,47 @@ The member now appears on the Dashboard with a live timer and running amount.
 
 **Cancel** (on the Dashboard) ends a session **without charging**, for example if the member was checked in by mistake.
 
+### Monthly passes
+
+A pass gives a member a **pool of hours** for a period, by default 30 days from the start date:
+
+| Pass | Hours in the pool | Example use |
+|---|---|---|
+| 1 hr/day × 30 days | 30 hours | 3 hours on Monday, none on Tuesday, … any mix up to 30 hours |
+| 2 hrs/day × 30 days | 60 hours | Any mix up to 60 hours |
+
+**Selling a pass:** go to **Passes → + Sell pass**, or click **Sell pass** next to a member, or use **Sell a pass** in the check-in window. Pick the member, the pass, the start date, an optional discount and the payment method. A pass receipt with the logo and address appears and can be printed.
+
+**Using a pass:** at check-in, **Use pass** is ticked automatically. At check-out:
+
+- Time used is taken from the pass first.
+- The visit's **counted time** is worked out exactly as for a normal visit: the plan's **minimum** (e.g. 30 min) and **rounding** (e.g. up to 15 min) apply. A 10-minute visit therefore counts as 30 minutes and uses 30 minutes of the pass.
+- The counted time is taken from the pass first. Anything the pass can't cover is charged at the member's rate plan.
+- The receipt shows the counted time, the time taken from the pass, the charged time, and the **pass hours left**.
+
+**Tracking:**
+
+- **Passes** lists every pass with a usage bar (hours used of total), hours left, validity dates and status. You can filter by status and search.
+- **Members** shows each member's current pass and hours left.
+- A member's **History** lists their passes and sessions.
+
+| Status | Meaning |
+|---|---|
+| Active | Valid today and has hours left |
+| Upcoming | Start date is in the future |
+| Used up | All hours used |
+| Expired | The end date has passed. Unused hours lapse. |
+| Cancelled | Cancelled; not counted in revenue |
+
+- A pass can be **cancelled** only if it hasn't been used yet, for example if it was sold by mistake.
+- If a member has more than one valid pass, the one that expires first is used first.
+- **Pass plans** (at the bottom of the Passes page) set the name, hours per day, number of days and price. Changing a plan doesn't affect passes already sold.
+- Pass sales count toward revenue on the Dashboard and in Reports.
+
+### Receipts
+
+Every receipt (computer usage and pass) is printed with the **logo**, **library name**, **address**, **phone** and **email** from **Settings → Library details**.
+
 ### History
 
 All sessions, newest first. Filter by check-in date, status (active / completed / cancelled) or search text. Click **Receipt** to reprint any past receipt. **Export CSV** downloads exactly what the filters show.
@@ -190,8 +235,8 @@ All sessions, newest first. Filter by check-in date, status (active / completed 
 
 Pick a preset (Today, Last 7 days, Last 30 days, This month) or a custom date range. Reports count **completed sessions by check-out time** and show:
 
-- Revenue, number of sessions, total and average time, average bill, discounts and tax collected.
-- Breakdown by **day**, **payment method**, **rate plan**, and the **top 10 members**.
+- Revenue (sessions and pass sales), pass sales, number of sessions, total and average time, average session bill, discounts and tax collected.
+- Breakdown by **day**, **payment method**, **rate plan** (passes appear as "Pass: …"), and the **top 10 members**.
 
 ### Managing computers
 
@@ -231,6 +276,15 @@ At check-out the bill is calculated as follows:
 | 3 h (max charge ₹100) | 3 h | ₹100.00 | ₹18.00 | ₹118.00 |
 
 The amount shown on the Dashboard while a member is checked in is a live estimate. The final amount is calculated by the app at the moment of check-out.
+
+**With a monthly pass:** steps 1–3 work the same way, giving the visit's counted time, including the minimum. The counted time is then taken from the pass, and only what the pass can't cover is charged (steps 4–8).
+
+| Visit (Standard: min 30, rounded up to 15) | Pass hours left | Taken from pass | Charged |
+|---|---|---|---|
+| 10 min | 50h | 30 min | ₹0 |
+| 47 min | 50h | 60 min | ₹0 |
+| 10 min | 20 min | 20 min | 10 min = ₹10 |
+| 10 min | 0 (used up) | – | 30 min = ₹30 |
 
 ---
 
@@ -353,7 +407,8 @@ Everything is transferred: members, history, rate card, computers, settings, **a
 │   ├── build.sh             # Builds the app and collects installers into dist/
 │   └── make_pkg.sh          # Wraps the Mac app in a .pkg installer
 ├── installer/               # .pkg welcome/finish screens and pre-install script
-├── make_icon.py             # Draws the 1024px source icon
+├── assets/logo.png          # Original Shivam Digital Library logo
+├── scripts/make_icons.py    # Builds ui/logo.png and the app icon from assets/logo.png
 ├── package.json             # Tauri command-line tool
 └── .github/workflows/build.yml   # Automatic Mac + Windows builds
 ```
@@ -451,7 +506,10 @@ git push origin v1.0.1
 | `computers` | Workstations | `name` (unique), `location`, `active` |
 | `rate_plans` | Rate card | `name` (unique), `rate_per_hour`, `minimum_minutes`, `increment_minutes`, `max_charge`, `is_default`, `active` |
 | `sessions` | Check-ins/check-outs | `member_id`, `computer_id`, `check_in`, `check_out`, `status` (`active`/`completed`/`cancelled`), billing results (`duration_minutes`, `billable_minutes`, `subtotal`, `discount`, `tax`, `total`, `payment_method`) |
-| `settings` | Key/value settings | `library_name`, `currency`, `tax_percent` |
+| `settings` | Key/value settings | `library_name`, `library_address`, `library_phone`, `library_email`, `currency`, `tax_percent` |
+| `pass_plans` | Monthly pass offers | `name`, `hours_per_day`, `validity_days`, `price`, `active` |
+| `member_passes` | Passes sold | `member_id`, `plan_name`, `total_minutes`, `start_date`, `end_date` (local dates, inclusive), `price`, `discount`, `tax`, `total`, `payment_method`, `status` (`active`/`cancelled`) |
+| `pass_status` *(view)* | Pass usage | All `member_passes` columns plus `used_minutes` (sum of `sessions.pass_minutes`) |
 
 - Each session stores a **snapshot** of the plan and tax at check-in (`plan_name`, `rate_per_hour`, `minimum_minutes`, `increment_minutes`, `max_charge`, `tax_percent`, `computer_name`). Later rate-card changes therefore never alter running or past sessions.
 - Partial unique indexes allow only **one active session per member** and **per computer**.
@@ -490,11 +548,18 @@ await window.__TAURI__.core.invoke("api", { method: "GET", path: "/api/members?q
 | PUT / DELETE | `/api/rates/{id}` | Update / delete plan |
 | GET | `/api/sessions?status=&from=&to=&member_id=&q=&limit=` | List sessions (`from`/`to` are ISO dates, filter on check-in time) |
 | GET | `/api/sessions/{id}` | One session (used for receipts) |
-| POST | `/api/sessions/checkin` | `member_id`, optional `computer_id`, `rate_plan_id` (default plan if omitted), `notes` |
+| POST | `/api/sessions/checkin` | `member_id`, optional `computer_id` (omit for **Own laptop**), `rate_plan_id` (default plan if omitted), `use_pass` (use the member's current pass), `notes` |
 | GET | `/api/sessions/{id}/quote?discount=` | Bill preview for an active session |
 | POST | `/api/sessions/{id}/checkout` | `payment_method`, optional `discount`, `notes`. Returns the completed session |
 | POST | `/api/sessions/{id}/cancel` | End without charge |
-| GET | `/api/reports?from=&to=` | Summary and breakdowns (filter on check-out time) |
+| GET | `/api/reports?from=&to=` | Summary and breakdowns (sessions by check-out time, pass sales by sale time) |
+| GET / POST | `/api/pass-plans` | List / create pass plan: `name`, `hours_per_day`, `validity_days`, `price`, `description`, `active` |
+| PUT / DELETE | `/api/pass-plans/{id}` | Update / delete pass plan (sold passes keep their own copy) |
+| GET | `/api/passes?member_id=&q=&state=` | List passes with `used_minutes`, `remaining_minutes` and `state` (active/upcoming/used up/expired/cancelled) |
+| POST | `/api/passes` | Sell: `member_id`, `pass_plan_id`, optional `start_date` (YYYY-MM-DD), `discount`, `payment_method`, `notes` |
+| GET | `/api/passes/{id}` | One pass (used for pass receipts) |
+| POST | `/api/passes/{id}/cancel` | Cancel an unused pass |
+| POST | `/api/export/passes?…` | Save passes CSV |
 | POST | `/api/export/members` | Shows a Save dialog and writes the members CSV. Returns `{saved}` or `{cancelled}` |
 | POST | `/api/export/sessions?…` | Same for sessions (same filters as `/api/sessions`) |
 | POST | `/api/backup` | Shows a Save dialog and writes a copy of the database |

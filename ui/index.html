@@ -10,11 +10,9 @@
 <div class="auth-screen" id="authScreen" hidden>
   <div class="auth-card">
     <div class="auth-brand">
-      <div class="logo">DL</div>
-      <div>
-        <div class="auth-title" id="authLibraryName">Digital Library</div>
-        <div class="muted small">Computer access desk</div>
-      </div>
+      <img src="logo.png" alt="" class="auth-logo">
+      <div class="auth-title" id="authLibraryName">Digital Library</div>
+      <div class="muted small">Computer access desk</div>
     </div>
 
     <form id="loginForm" novalidate>
@@ -44,7 +42,7 @@
 <div class="layout" id="app" hidden>
   <aside class="sidebar">
     <div class="brand">
-      <div class="logo">DL</div>
+      <img src="logo.png" alt="" class="brand-logo">
       <div>
         <div class="brand-name" id="brandName">Digital Library</div>
         <div class="brand-sub">Computer access desk</div>
@@ -53,6 +51,7 @@
     <nav>
       <a href="#dashboard" data-view="dashboard">Dashboard</a>
       <a href="#members" data-view="members">Members</a>
+      <a href="#passes" data-view="passes">Passes</a>
       <a href="#history" data-view="history">History</a>
       <a href="#reports" data-view="reports">Reports</a>
       <a href="#rates" data-view="rates">Rate Card</a>
@@ -76,7 +75,7 @@
     <!-- Dashboard -->
     <section class="view" id="view-dashboard" hidden>
       <header class="page-head">
-        <div><h1>Dashboard</h1><p class="muted">Live view of who is using the computers right now.</p></div>
+        <div><h1>Dashboard</h1><p class="muted">Live view of who is checked in right now.</p></div>
         <button class="btn primary" id="btnCheckin">+ New check-in</button>
       </header>
       <div class="stats" id="stats"></div>
@@ -84,7 +83,7 @@
         <div class="card-head"><h2>Currently checked in <span class="pill" id="activeCount">0</span></h2></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Member</th><th>Computer</th><th>Plan</th><th>Checked in</th><th>Time used</th><th class="num">Amount so far</th><th></th></tr></thead>
+            <thead><tr><th>Member</th><th>Device</th><th>Plan</th><th>Checked in</th><th>Time used</th><th class="num">Amount so far</th><th></th></tr></thead>
             <tbody id="activeBody"></tbody>
           </table>
         </div>
@@ -106,10 +105,50 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>ID number</th><th>Email</th><th>Phone</th><th class="num">Visits</th><th class="num">Total spent</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>ID number</th><th>Email</th><th>Phone</th><th>Pass</th><th class="num">Visits</th><th class="num">Total spent</th><th>Status</th><th></th></tr></thead>
             <tbody id="membersBody"></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- Passes -->
+    <section class="view" id="view-passes" hidden>
+      <header class="page-head">
+        <div><h1>Monthly passes</h1><p class="muted">Sell passes and track how many hours each member has used and has left.</p></div>
+        <div class="row">
+          <button class="btn" id="btnExportPasses">Export CSV</button>
+          <button class="btn primary" id="btnSellPass">+ Sell pass</button>
+        </div>
+      </header>
+      <div class="card">
+        <div class="toolbar wrap">
+          <select id="pState">
+            <option value="">All passes</option>
+            <option value="active" selected>Active</option>
+            <option value="upcoming">Upcoming</option>
+            <option value="used up">Used up</option>
+            <option value="expired">Expired</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <input type="search" id="pSearch" placeholder="Search member, ID number, phone or pass" autocomplete="off">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Pass #</th><th>Member</th><th>Pass</th><th>Valid</th><th>Hours used</th><th class="num">Hours left</th><th class="num">Paid</th><th>Status</th><th></th></tr></thead>
+            <tbody id="passesBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Pass plans</h2><button class="btn sm primary" id="btnAddPassPlan">+ Add pass plan</button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Plan</th><th class="num">Hours / day</th><th class="num">Valid for</th><th class="num">Total hours</th><th class="num">Price</th><th>Status</th><th></th></tr></thead>
+            <tbody id="passPlansBody"></tbody>
+          </table>
+        </div>
+        <div class="card-foot">A pass gives <strong>hours per day × days</strong> as one pool of hours that can be used on any day while the pass is valid. Each visit uses at least the rate plan's minimum (e.g. 30 min) from the pass; time the pass can't cover is charged at the member's normal rate.</div>
       </div>
     </section>
 
@@ -223,9 +262,14 @@
       </header>
       <div class="grid-2">
         <div class="card">
-          <div class="card-head"><h2>General</h2></div>
+          <div class="card-head"><h2>Library details (printed on receipts)</h2></div>
           <form id="settingsForm" class="pad">
-            <div class="field"><label for="sLibraryName">Library name (shown on receipts)</label><input id="sLibraryName" name="library_name" maxlength="80" required></div>
+            <div class="field"><label for="sLibraryName">Library name</label><input id="sLibraryName" name="library_name" maxlength="80" required></div>
+            <div class="field"><label for="sAddress">Address</label><textarea id="sAddress" name="library_address" rows="3" maxlength="300" placeholder="Street, area, city, PIN"></textarea></div>
+            <div class="form-grid">
+              <div class="field"><label for="sPhone">Phone</label><input id="sPhone" name="library_phone" type="tel" maxlength="40"></div>
+              <div class="field"><label for="sEmail">Email</label><input id="sEmail" name="library_email" type="email" maxlength="160"></div>
+            </div>
             <button class="btn primary" type="submit">Save</button>
           </form>
         </div>

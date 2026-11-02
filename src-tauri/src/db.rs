@@ -7,8 +7,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
-pub const SETTINGS_DEFAULTS: [(&str, &str); 3] =
-    [("library_name", "Digital Library"), ("currency", "₹"), ("tax_percent", "0")];
+pub const DEFAULT_LIBRARY_NAME: &str = "Shivam Digital Library";
+
+pub const SETTINGS_DEFAULTS: [(&str, &str); 6] = [
+    ("library_name", DEFAULT_LIBRARY_NAME),
+    ("library_address", "Ordely Bazar, Varanasi"),
+    ("library_phone", ""),
+    ("library_email", "ssetpamgs@gmail.com"),
+    ("currency", "₹"),
+    ("tax_percent", "0"),
+];
 
 // Same schema as the original Python version, so existing databases and backups keep working.
 const SCHEMA: &str = r#"
@@ -79,6 +87,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_session_per_member ON sessions(memb
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_session_per_computer ON sessions(computer_id) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS sessions_check_in ON sessions(check_in);
 CREATE INDEX IF NOT EXISTS sessions_check_out ON sessions(check_out);
+CREATE TABLE IF NOT EXISTS pass_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    description TEXT NOT NULL DEFAULT '',
+    hours_per_day REAL NOT NULL,
+    validity_days INTEGER NOT NULL DEFAULT 30,
+    price REAL NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS member_passes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL REFERENCES members(id),
+    pass_plan_id INTEGER REFERENCES pass_plans(id) ON DELETE SET NULL,
+    plan_name TEXT NOT NULL,
+    hours_per_day REAL NOT NULL,
+    validity_days INTEGER NOT NULL,
+    total_minutes INTEGER NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    price REAL NOT NULL,
+    discount REAL NOT NULL DEFAULT 0,
+    tax REAL NOT NULL DEFAULT 0,
+    total REAL NOT NULL,
+    payment_method TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled')),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS member_passes_member ON member_passes(member_id);
+CREATE INDEX IF NOT EXISTS member_passes_created ON member_passes(created_at);
+"#;
+
+// Added in 2.1; created after the sessions columns exist.
+const PASS_OBJECTS: &str = r#"
+CREATE INDEX IF NOT EXISTS sessions_pass ON sessions(pass_id);
+CREATE VIEW IF NOT EXISTS pass_status AS
+SELECT p.*,
+    COALESCE((SELECT SUM(s.pass_minutes) FROM sessions s WHERE s.pass_id = p.id AND s.status = 'completed'), 0) AS used_minutes
+FROM member_passes p;
 "#;
 
 pub fn connect(path: &Path) -> ApiResult<Connection> {
@@ -96,8 +143,31 @@ pub fn init(path: &Path) -> ApiResult<()> {
     conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
     let tx = conn.transaction()?;
     tx.execute_batch(SCHEMA)?;
+    let session_columns: Vec<String> = {
+        let mut stmt = tx.prepare("PRAGMA table_info(sessions)")?;
+        let names = stmt.query_map([], |r| r.get::<_, String>(1))?.collect::<Result<_, _>>()?;
+        names
+    };
+    for (column, definition) in [
+        ("pass_id", "INTEGER REFERENCES member_passes(id)"),
+        ("pass_minutes", "INTEGER NOT NULL DEFAULT 0"),
+        ("pass_balance", "INTEGER"),
+    ] {
+        if !session_columns.iter().any(|c| c == column) {
+            tx.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {column} {definition};"))?;
+        }
+    }
+    tx.execute_batch(PASS_OBJECTS)?;
     for (key, value) in SETTINGS_DEFAULTS {
         tx.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)", params![key, value])?;
+    }
+    if !flag_set(&tx, "branding_v2")? {
+        // Only replaces the untouched 1.x default name, never a name the library typed in.
+        tx.execute(
+            "UPDATE settings SET value = ?1 WHERE key = 'library_name' AND value = 'Digital Library'",
+            params![DEFAULT_LIBRARY_NAME],
+        )?;
+        set_flag(&tx, "branding_v2")?;
     }
     let has_user: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM users)", [], |r| r.get(0))?;
     if !has_user {
@@ -127,7 +197,25 @@ pub fn init(path: &Path) -> ApiResult<()> {
         }
         tx.execute("INSERT INTO settings (key, value) VALUES ('seeded', '1')", [])?;
     }
+    if !flag_set(&tx, "seeded_passes")? {
+        for (name, hours, price) in [("Monthly – 1 hr/day", 1.0, 600.0), ("Monthly – 2 hrs/day", 2.0, 1000.0)] {
+            tx.execute(
+                "INSERT OR IGNORE INTO pass_plans (name, hours_per_day, validity_days, price) VALUES (?1, ?2, 30, ?3)",
+                params![name, hours, price],
+            )?;
+        }
+        set_flag(&tx, "seeded_passes")?;
+    }
     tx.commit()?;
+    Ok(())
+}
+
+fn flag_set(conn: &Connection, key: &str) -> ApiResult<bool> {
+    Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key = ?1)", params![key], |r| r.get(0))?)
+}
+
+fn set_flag(conn: &Connection, key: &str) -> ApiResult<()> {
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, '1')", params![key])?;
     Ok(())
 }
 

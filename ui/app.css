@@ -48,10 +48,7 @@ a { color: var(--primary); }
   position: sticky; top: 0; height: 100vh;
 }
 .brand { display: flex; gap: 12px; align-items: center; padding: 0 8px 22px; }
-.logo {
-  width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; font-weight: 800; color: #fff;
-  background: linear-gradient(135deg, #6366f1, #06b6d4);
-}
+.brand-logo { width: 48px; height: 48px; border-radius: 50%; background: #fff; flex-shrink: 0; object-fit: contain; }
 .brand-name { color: #fff; font-weight: 700; font-size: 15px; }
 .brand-sub { font-size: 12px; color: #94a3b8; }
 nav { display: flex; flex-direction: column; gap: 2px; }
@@ -136,8 +133,9 @@ textarea { resize: vertical; }
 .auth-card { width: min(400px, 100%); background: #fff; border-radius: 18px; padding: 28px; box-shadow: 0 30px 80px rgba(0, 0, 0, .35); }
 .auth-card h2 { font-size: 20px; margin: 18px 0 14px; }
 .auth-card form > .form-error { margin-bottom: 12px; }
-.auth-brand { display: flex; gap: 12px; align-items: center; }
-.auth-title { font-weight: 700; font-size: 16px; }
+.auth-brand { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
+.auth-logo { width: 120px; height: 120px; object-fit: contain; margin-bottom: 6px; }
+.auth-title { font-weight: 700; font-size: 18px; }
 .btn.block { width: 100%; justify-content: center; padding: 11px 14px; }
 .auth-card .link-btn { display: block; margin: 12px auto 0; }
 .example { background: var(--bg); padding: 8px 10px; border-radius: 8px; margin-bottom: 10px; }
@@ -195,6 +193,16 @@ textarea { resize: vertical; }
 .picker-item:hover:not(:disabled) { border-color: var(--primary); background: var(--primary-soft); }
 .picker-item:disabled { opacity: .55; cursor: not-allowed; }
 .picked { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--primary-soft); border: 1px solid #c7d2fe; border-radius: 10px; padding: 10px 12px; }
+.link-btn.inline-link { padding: 0 0 0 8px; }
+.device-pick { display: flex; align-items: center; min-height: 40px; padding: 0 2px; }
+.pass-box { background: var(--green-soft); border: 1px solid #a7f3d0; color: #065f46; border-radius: 10px; padding: 10px 12px; align-items: flex-start; }
+.pass-box input { margin-top: 3px; }
+.pass-note { color: var(--green); font-weight: 600; }
+.modal-body h4 { margin: 14px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.usage-cell { min-width: 150px; }
+.nowrap { white-space: nowrap; }
+.usage { height: 8px; border-radius: 4px; background: #eef1f6; overflow: hidden; margin-bottom: 4px; }
+.usage span { display: block; height: 100%; background: linear-gradient(90deg, #1e3a8a, #d4a017); }
 
 .checkout-head { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: var(--bg); padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; }
 table.bill { margin-bottom: 14px; }
@@ -205,6 +213,9 @@ table.bill tr.total td { font-size: 20px; font-weight: 800; border-bottom: none;
 
 .receipt-head { text-align: center; margin-bottom: 14px; }
 .receipt-head h2 { justify-content: center; font-size: 20px; }
+.receipt-logo { width: 84px; height: 84px; object-fit: contain; display: block; margin: 0 auto 6px; }
+.receipt-address { white-space: pre-line; font-size: 13px; }
+.receipt-title { font-weight: 600; margin-top: 8px; }
 .thanks { text-align: center; color: var(--muted); margin-top: 8px; }
 
 /* toasts */

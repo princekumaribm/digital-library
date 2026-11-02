@@ -5,6 +5,8 @@ const state = {
   rates: [],
   computers: [],
   members: [],
+  passes: [],
+  passPlans: [],
   active: [],
   history: [],
   clockOffset: 0,
@@ -35,6 +37,13 @@ function fmtClock(sec) {
 }
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—");
 const fmtDate = (d) => new Date(d).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+function fmtDay(value) {
+  if (!value) return "—";
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+}
+const fmtHours = (h) => `${Number(h)} hr${Number(h) === 1 ? "" : "s"}`;
+const num6 = (id) => String(id).padStart(6, "0");
 const dateInputValue = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 function dayISO(value, addDays = 0) {
   const [y, m, d] = value.split("-").map(Number);
@@ -46,17 +55,23 @@ function debounce(fn, ms = 250) {
 }
 
 // Mirrors the backend's compute_bill(); used for live estimates only.
-function priceFor(plan, usedMinutes, taxPercent) {
-  const step = Math.max(1, Number(plan.increment_minutes) || 1);
-  const billable = Math.max(Math.ceil(usedMinutes / step) * step, Number(plan.minimum_minutes) || 0);
+function chargeFor(plan, billable, taxPercent) {
   let subtotal = round2((billable * Number(plan.rate_per_hour)) / 60);
   if (plan.max_charge > 0) subtotal = Math.min(subtotal, round2(plan.max_charge));
   const tax = round2((subtotal * taxPercent) / 100);
-  return { billable, subtotal, tax, total: round2(subtotal + tax) };
+  return { subtotal, tax, total: round2(subtotal + tax) };
+}
+function priceFor(plan, usedMinutes, taxPercent) {
+  const step = Math.max(1, Number(plan.increment_minutes) || 1);
+  const billable = Math.max(Math.ceil(usedMinutes / step) * step, Number(plan.minimum_minutes) || 0);
+  return { billable, ...chargeFor(plan, billable, taxPercent) };
 }
 function estimate(session, nowMs) {
   const sec = Math.max(0, (nowMs - Date.parse(session.check_in)) / 1000);
-  return { sec, ...priceFor(session, Math.ceil(Math.floor(sec) / 60), session.tax_percent) };
+  const counted = priceFor(session, Math.ceil(Math.floor(sec) / 60), session.tax_percent).billable;
+  const passLeft = session.pass_id ? Math.max(0, Number(session.pass_remaining) || 0) : null;
+  const passMinutes = passLeft == null ? 0 : Math.min(counted, passLeft);
+  return { sec, passLeft, passMinutes, ...chargeFor(session, counted - passMinutes, session.tax_percent) };
 }
 function billingRule(p) {
   const parts = [];
@@ -174,6 +189,10 @@ async function loadLookups() {
   document.title = settings.library_name;
 }
 
+async function ensureSettings() {
+  if (!state.settings.version) await loadLookups();
+}
+
 // ------------------------------------------------------------ dashboard
 
 async function loadDashboard() {
@@ -182,10 +201,11 @@ async function loadDashboard() {
   state.active = sessions.items;
   const cards = [
     ["Checked in now", stats.active_sessions, ""],
-    ["Computers free", `${stats.computers_free} / ${stats.computers_total}`, ""],
     ["Today's revenue", money(stats.today_revenue), "accent"],
     ["Today's check-ins", stats.today_checkins, ""],
     ["Usage today", fmtMinutes(stats.today_minutes), ""],
+    ["Active passes", stats.active_passes, ""],
+    ["Computers free", `${stats.computers_free} / ${stats.computers_total}`, ""],
     ["Members", stats.members, ""],
   ];
   $("#stats").innerHTML = cards.map(([label, value, cls]) => `<div class="stat ${cls}"><div class="stat-label">${esc(label)}</div><div class="stat-value">${esc(value)}</div></div>`).join("");
@@ -203,7 +223,7 @@ function renderActive() {
     <tr data-id="${s.id}">
       <td><strong>${esc(fullName(s))}</strong><div class="muted small">ID ${esc(s.id_number)} · ${esc(s.phone)}</div></td>
       <td>${esc(s.computer_name || "—")}</td>
-      <td>${esc(s.plan_name)}<div class="muted small">${money(s.rate_per_hour)}/hr</div></td>
+      <td>${esc(s.plan_name)}<div class="muted small">${money(s.rate_per_hour)}/hr</div>${s.pass_id ? `<div class="small pass-note" data-pass></div>` : ""}</td>
       <td>${fmtDateTime(s.check_in)}</td>
       <td class="mono" data-elapsed></td>
       <td class="mono num strong" data-amount></td>
@@ -224,6 +244,8 @@ function tickActive() {
     const e = estimate(s, now);
     $("[data-elapsed]", row).textContent = fmtClock(e.sec);
     $("[data-amount]", row).textContent = money(e.total);
+    const passCell = $("[data-pass]", row);
+    if (passCell) passCell.textContent = `Pass: ${fmtMinutes(e.passLeft - e.passMinutes)} left`;
   }
 }
 
@@ -236,6 +258,58 @@ async function cancelSession(id) {
   });
 }
 
+// ------------------------------------------------------------ member picker (check-in & passes)
+
+const memberPickerHtml = () => `
+  <div id="mpPicked"></div>
+  <div id="mpPicker">
+    <input type="search" id="mpSearch" placeholder="Search by name, ID number, phone or email" autocomplete="off">
+    <div class="picker-results" id="mpResults"></div>
+    <button type="button" class="link-btn" id="mpNew">+ Register a new member</button>
+  </div>`;
+
+function bindMemberPicker(modal, { member = null, blockCheckedIn = false, onChange = () => {}, onNew }) {
+  let selected = member;
+  const render = () => {
+    $("#mpPicked", modal).innerHTML = selected ? `
+      <div class="picked">
+        <div><strong>${esc(fullName(selected))}</strong><div class="muted small">ID ${esc(selected.id_number)} · ${esc(selected.phone)} · ${esc(selected.email)}</div></div>
+        <button type="button" class="btn sm" id="mpChange">Change</button>
+      </div>` : "";
+    $("#mpPicker", modal).hidden = !!selected;
+    if (selected) $("#mpChange", modal).onclick = () => { selected = null; render(); $("#mpSearch", modal).focus(); };
+    onChange(selected);
+  };
+  const search = debounce(async () => {
+    const q = $("#mpSearch", modal).value.trim();
+    const box = $("#mpResults", modal);
+    if (!q) { box.innerHTML = ""; return; }
+    try {
+      const { items } = await api(`/api/members?q=${encodeURIComponent(q)}&limit=8`);
+      box.innerHTML = items.length
+        ? items.map((m) => {
+          const blocked = blockCheckedIn && m.active_session_id;
+          const info = blocked ? "Already checked in" : m.pass_id ? `Pass: ${fmtMinutes(m.pass_remaining)} left` : esc(m.phone);
+          return `<button type="button" class="picker-item" data-id="${m.id}" ${blocked ? "disabled" : ""}>
+            <span><strong>${esc(fullName(m))}</strong> <span class="muted small">ID ${esc(m.id_number)}</span></span>
+            <span class="muted small">${info}</span>
+          </button>`;
+        }).join("")
+        : `<div class="muted small pad-sm">No members found. Register them below.</div>`;
+      $$(".picker-item", box).forEach((btn) => {
+        btn.onclick = () => { selected = items.find((i) => String(i.id) === btn.dataset.id); render(); };
+      });
+    } catch (e) {
+      box.innerHTML = `<div class="form-error">${esc(e.message)}</div>`;
+    }
+  }, 200);
+  $("#mpSearch", modal).addEventListener("input", search);
+  $("#mpNew", modal).onclick = onNew;
+  render();
+  if (!selected) $("#mpSearch", modal).focus();
+  return () => selected;
+}
+
 // ------------------------------------------------------------ check-in
 
 async function openCheckin({ member = null, computerId = null } = {}) {
@@ -243,26 +317,23 @@ async function openCheckin({ member = null, computerId = null } = {}) {
   const free = state.computers.filter((c) => c.active && !c.session_id);
   const plans = state.rates.filter((r) => r.active);
   if (!plans.length) return toast("Add an active rate plan in the Rate Card first.", "error");
-  let selected = member;
 
-  const computerOptions = free.map((c) => `<option value="${c.id}" ${c.id === computerId ? "selected" : ""}>${esc(c.name)}${c.location ? ` · ${esc(c.location)}` : ""}</option>`).join("");
+  const deviceOptions = `<option value="">Own laptop</option>` + free.map((c) =>
+    `<option value="${c.id}" ${c.id === computerId ? "selected" : ""}>${esc(c.name)}${c.location ? ` · ${esc(c.location)}` : ""}</option>`).join("");
   const modal = openModal({
     title: "New check-in",
     body: `
-      <div class="field">
-        <label>Member <span class="req">*</span></label>
-        <div id="ciPicked"></div>
-        <div id="ciPicker">
-          <input type="search" id="ciSearch" placeholder="Search by name, ID number, phone or email" autocomplete="off">
-          <div class="picker-results" id="ciResults"></div>
-          <button type="button" class="link-btn" id="ciNew">+ Register a new member</button>
-        </div>
-      </div>
+      <div class="field"><label>Member <span class="req">*</span></label>${memberPickerHtml()}</div>
+      <div id="ciPass"></div>
       <div class="form-grid">
         <div class="field">
-          <label for="ciComputer">Computer</label>
-          <select id="ciComputer">${computerOptions}<option value="">No computer assigned</option></select>
-          ${free.length ? "" : '<small class="muted">All computers are currently in use.</small>'}
+          <label for="ciComputer">Device</label>
+          <div class="device-pick" id="ciDeviceView">
+            <strong id="ciDeviceName"></strong>
+            <button type="button" class="link-btn inline-link" id="ciDeviceChange">Change</button>
+          </div>
+          <select id="ciComputer" hidden>${deviceOptions}</select>
+          <small class="muted" id="ciDeviceHint">${free.length ? "" : "All library computers are in use."}</small>
         </div>
         <div class="field">
           <label for="ciPlan">Rate plan</label>
@@ -275,56 +346,51 @@ async function openCheckin({ member = null, computerId = null } = {}) {
     footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="ciSubmit">Check in</button>`,
   });
 
-  const renderPicked = () => {
-    $("#ciPicked", modal).innerHTML = selected ? `
-      <div class="picked">
-        <div><strong>${esc(fullName(selected))}</strong><div class="muted small">ID ${esc(selected.id_number)} · ${esc(selected.phone)} · ${esc(selected.email)}</div></div>
-        <button type="button" class="btn sm" id="ciChange">Change</button>
-      </div>` : "";
-    $("#ciPicker", modal).hidden = !!selected;
-    if (selected) $("#ciChange", modal).onclick = () => { selected = null; renderPicked(); $("#ciSearch", modal).focus(); };
+  const select = $("#ciComputer", modal);
+  const renderDevice = () => { $("#ciDeviceName", modal).textContent = select.options[select.selectedIndex].text; };
+  $("#ciDeviceChange", modal).onclick = () => {
+    $("#ciDeviceView", modal).hidden = true;
+    select.hidden = false;
+    select.focus();
   };
+  select.addEventListener("change", renderDevice);
+  renderDevice();
+
+  const renderPass = (m) => {
+    const box = $("#ciPass", modal);
+    if (!m) { box.innerHTML = ""; return; }
+    box.innerHTML = m.pass_id
+      ? `<label class="check pass-box"><input type="checkbox" id="ciUsePass" checked>
+          <span>Use pass <strong>${esc(m.pass_name)}</strong> — ${fmtMinutes(m.pass_remaining)} left, valid till ${fmtDay(m.pass_end_date)}</span></label>`
+      : `<p class="muted small">No active pass. <button type="button" class="link-btn inline-link" id="ciSellPass">Sell a pass</button></p>`;
+    const sell = $("#ciSellPass", box);
+    if (sell) sell.onclick = () => openSellPass({ member: m, onDone: () => api(`/api/members/${m.id}`).then((fresh) => openCheckin({ member: fresh, computerId: Number(select.value) || null })) });
+  };
+  const getMember = bindMemberPicker(modal, {
+    member,
+    blockCheckedIn: true,
+    onChange: renderPass,
+    onNew: () => openMemberForm(null, (m) => openCheckin({ member: m, computerId: Number(select.value) || null })),
+  });
+
   const renderRule = () => {
     const plan = plans.find((p) => String(p.id) === $("#ciPlan", modal).value);
     $("#ciPlanRule", modal).textContent = plan ? billingRule(plan) : "";
   };
-
-  const search = debounce(async () => {
-    const q = $("#ciSearch", modal).value.trim();
-    const box = $("#ciResults", modal);
-    if (!q) { box.innerHTML = ""; return; }
-    try {
-      const { items } = await api(`/api/members?q=${encodeURIComponent(q)}&limit=8`);
-      box.innerHTML = items.length
-        ? items.map((m) => `
-          <button type="button" class="picker-item" data-id="${m.id}" ${m.active_session_id ? "disabled" : ""}>
-            <span><strong>${esc(fullName(m))}</strong> <span class="muted small">ID ${esc(m.id_number)}</span></span>
-            <span class="muted small">${m.active_session_id ? "Already checked in" : esc(m.phone)}</span>
-          </button>`).join("")
-        : `<div class="muted small pad-sm">No members found. Register them below.</div>`;
-      $$(".picker-item", box).forEach((btn) => {
-        btn.onclick = () => { selected = items.find((i) => String(i.id) === btn.dataset.id); renderPicked(); };
-      });
-    } catch (e) {
-      box.innerHTML = `<div class="form-error">${esc(e.message)}</div>`;
-    }
-  }, 200);
-
-  $("#ciSearch", modal).addEventListener("input", search);
   $("#ciPlan", modal).addEventListener("change", renderRule);
-  $("#ciNew", modal).onclick = () => {
-    const chosen = Number($("#ciComputer", modal).value) || null;
-    openMemberForm(null, (m) => openCheckin({ member: m, computerId: chosen }));
-  };
+  renderRule();
+
   $("#ciSubmit", modal).onclick = async () => {
+    const selected = getMember();
     if (!selected) return showFormError(modal, "Select a member to check in.");
     try {
       await api("/api/sessions/checkin", {
         method: "POST",
         body: {
           member_id: selected.id,
-          computer_id: $("#ciComputer", modal).value || null,
+          computer_id: select.value || null,
           rate_plan_id: $("#ciPlan", modal).value,
+          use_pass: Boolean($("#ciUsePass", modal)?.checked),
           notes: $("#ciNotes", modal).value,
         },
       });
@@ -335,26 +401,47 @@ async function openCheckin({ member = null, computerId = null } = {}) {
       showFormError(modal, e.message);
     }
   };
-  renderPicked();
-  renderRule();
-  if (!selected) $("#ciSearch", modal).focus();
 }
 
 // ------------------------------------------------------------ check-out & receipts
 
 function billTable(s, b) {
   const rule = billingRule(s);
+  const counted = b.counted_minutes ?? (b.billable_minutes || 0) + (b.pass_minutes || 0);
   return `<table class="bill">
     <tr><td>Checked in</td><td>${fmtDateTime(s.check_in)}</td></tr>
     <tr><td>Checked out</td><td>${fmtDateTime(b.check_out)}</td></tr>
     <tr><td>Time used</td><td>${fmtMinutes(b.used_minutes)}${b.elapsed_seconds != null ? ` <span class="muted small">(${fmtClock(b.elapsed_seconds)})</span>` : ""}</td></tr>
-    <tr><td>Billable time</td><td>${fmtMinutes(b.billable_minutes)}${rule ? `<div class="muted small">${esc(rule)}</div>` : ""}</td></tr>
+    ${s.pass_id ? `
+    <tr><td>Counted time</td><td>${fmtMinutes(counted)}${rule ? `<div class="muted small">${esc(rule)}</div>` : ""}</td></tr>
+    <tr><td>From pass <span class="muted small">${esc(s.pass_name || "")}</span></td><td>− ${fmtMinutes(b.pass_minutes)}</td></tr>
+    <tr><td>Billable time</td><td>${fmtMinutes(b.billable_minutes)}</td></tr>` : `
+    <tr><td>Billable time</td><td>${fmtMinutes(b.billable_minutes)}${rule ? `<div class="muted small">${esc(rule)}</div>` : ""}</td></tr>`}
     <tr><td>Rate</td><td>${esc(s.plan_name)} · ${money(s.rate_per_hour)}/hr</td></tr>
     <tr><td>Subtotal</td><td>${money(b.subtotal)}</td></tr>
     ${b.discount > 0 ? `<tr><td>Discount</td><td>− ${money(b.discount)}</td></tr>` : ""}
     ${s.tax_percent > 0 ? `<tr><td>Tax (${esc(s.tax_percent)}%)</td><td>${money(b.tax)}</td></tr>` : ""}
     <tr class="total"><td>Total</td><td>${money(b.total)}</td></tr>
+    ${b.pass_balance != null ? `<tr><td>Pass hours left</td><td>${fmtMinutes(b.pass_balance)}</td></tr>` : ""}
   </table>`;
+}
+
+function receiptHeader(title, subtitle) {
+  const st = state.settings;
+  const contact = [st.library_phone, st.library_email].filter(Boolean).map(esc).join(" · ");
+  return `<div class="receipt-head">
+    <img src="logo.png" alt="" class="receipt-logo">
+    <h2>${esc(st.library_name)}</h2>
+    ${st.library_address ? `<div class="receipt-address">${esc(st.library_address)}</div>` : ""}
+    ${contact ? `<div class="muted small">${contact}</div>` : ""}
+    <div class="receipt-title">${esc(title)}</div>
+    <div class="muted small">${subtitle}</div>
+  </div>`;
+}
+
+const printButton = () => `<button class="btn" data-close>Close</button><button class="btn primary" id="btnPrint">Print receipt</button>`;
+function bindPrint(modal) {
+  $("#btnPrint", modal).onclick = () => guard(() => api("/api/print", { method: "POST" }));
 }
 
 async function openCheckout(id) {
@@ -369,7 +456,7 @@ async function openCheckout(id) {
     body: `
       <div class="checkout-head">
         <div><div class="muted small">Member</div><strong>${esc(fullName(s))}</strong><div class="muted small">ID ${esc(s.id_number)} · ${esc(s.phone)}</div></div>
-        <div><div class="muted small">Computer</div><strong>${esc(s.computer_name || "—")}</strong></div>
+        <div><div class="muted small">Device</div><strong>${esc(s.computer_name || "—")}</strong>${s.pass_id ? `<div class="muted small">Pass: ${esc(s.pass_name || "")}</div>` : ""}</div>
       </div>
       <div id="coBill"></div>
       <div class="form-grid">
@@ -394,7 +481,8 @@ async function openCheckout(id) {
   $("#coDiscount", modal).addEventListener("input", requote);
 
   $("#coSubmit", modal).onclick = async (ev) => {
-    ev.currentTarget.disabled = true;
+    const btn = ev.currentTarget;
+    btn.disabled = true;
     try {
       const done = await api(`/api/sessions/${id}/checkout`, {
         method: "POST",
@@ -404,32 +492,30 @@ async function openCheckout(id) {
       refreshCurrent();
       showReceipt(done);
     } catch (e) {
-      ev.currentTarget.disabled = false;
+      btn.disabled = false;
       showFormError(modal, e.message);
     }
   };
 }
 
-function showReceipt(s) {
+async function showReceipt(s) {
+  await ensureSettings();
   const b = {
     check_out: s.check_out, used_minutes: s.duration_minutes, billable_minutes: s.billable_minutes,
+    pass_minutes: s.pass_minutes || 0, pass_balance: s.pass_balance,
     subtotal: s.subtotal, discount: s.discount, tax: s.tax, total: s.total,
   };
   const modal = openModal({
-    title: `Receipt #${String(s.id).padStart(6, "0")}`,
+    title: `Receipt #${num6(s.id)}`,
     body: `
       <div class="receipt" id="receipt">
-        <div class="receipt-head">
-          <h2>${esc(state.settings.library_name)}</h2>
-          <div class="muted">Computer usage receipt</div>
-          <div class="muted small">Receipt #${String(s.id).padStart(6, "0")} · ${fmtDateTime(s.check_out)}</div>
-        </div>
+        ${receiptHeader("Computer usage receipt", `Receipt #${num6(s.id)} · ${fmtDateTime(s.check_out)}`)}
         <table class="bill">
           <tr><td>Member</td><td>${esc(fullName(s))}</td></tr>
           <tr><td>ID number</td><td>${esc(s.id_number)}</td></tr>
           <tr><td>Phone</td><td>${esc(s.phone)}</td></tr>
           <tr><td>Email</td><td>${esc(s.email)}</td></tr>
-          <tr><td>Computer</td><td>${esc(s.computer_name || "—")}</td></tr>
+          <tr><td>Device</td><td>${esc(s.computer_name || "—")}</td></tr>
         </table>
         ${billTable(s, b)}
         <table class="bill">
@@ -439,9 +525,9 @@ function showReceipt(s) {
         </table>
         <p class="thanks">Thank you for visiting!</p>
       </div>`,
-    footer: `<button class="btn" data-close>Close</button><button class="btn primary" id="btnPrint">Print receipt</button>`,
+    footer: printButton(),
   });
-  $("#btnPrint", modal).onclick = () => guard(() => api("/api/print", { method: "POST" }));
+  bindPrint(modal);
 }
 
 async function openReceipt(id) {
@@ -460,6 +546,9 @@ async function loadMembers() {
       <td class="mono">${esc(m.id_number)}</td>
       <td>${esc(m.email)}</td>
       <td>${esc(m.phone)}</td>
+      <td>${m.pass_id
+        ? `<span class="badge ok">${fmtMinutes(m.pass_remaining)} left</span><div class="muted small">${esc(m.pass_name)} · till ${fmtDay(m.pass_end_date)}</div>`
+        : '<span class="muted small">—</span>'}</td>
       <td class="num">${m.visits}</td>
       <td class="num">${money(m.total_spent)}</td>
       <td>${m.active_session_id ? '<span class="badge live">Checked in</span>' : '<span class="badge">Away</span>'}</td>
@@ -467,12 +556,13 @@ async function loadMembers() {
         ${m.active_session_id
           ? `<button class="btn sm primary" data-act="checkout" data-id="${m.active_session_id}">Check out</button>`
           : `<button class="btn sm primary" data-act="checkin" data-id="${m.id}">Check in</button>`}
+        <button class="btn sm" data-act="sell-pass" data-id="${m.id}">Sell pass</button>
         <button class="btn sm" data-act="edit" data-id="${m.id}">Edit</button>
         <button class="btn sm" data-act="history" data-id="${m.id}">History</button>
         <button class="btn sm ghost danger-text" data-act="delete" data-id="${m.id}">Delete</button>
       </td>
     </tr>`).join("")
-    : `<tr><td colspan="8" class="empty">${q ? "No members match your search." : "No members yet. Click “Add member” to register one."}</td></tr>`;
+    : `<tr><td colspan="9" class="empty">${q ? "No members match your search." : "No members yet. Click “Add member” to register one."}</td></tr>`;
 }
 
 function openMemberForm(member = null, onSaved = null) {
@@ -509,20 +599,26 @@ function openMemberForm(member = null, onSaved = null) {
 
 async function openMemberHistory(member) {
   await guard(async () => {
-    const { items } = await api(`/api/sessions?member_id=${member.id}`);
-    const spent = items.filter((s) => s.status === "completed").reduce((a, s) => a + s.total, 0);
+    const [{ items }, passes] = await Promise.all([
+      api(`/api/sessions?member_id=${member.id}`),
+      api(`/api/passes?member_id=${member.id}`),
+    ]);
+    const spent = items.filter((s) => s.status === "completed").reduce((a, s) => a + s.total, 0)
+      + passes.items.filter((p) => p.status === "active").reduce((a, p) => a + p.total, 0);
     const modal = openModal({
       title: `History · ${fullName(member)}`,
       wide: true,
       body: `
-        <p class="muted small">ID ${esc(member.id_number)} · ${esc(member.email)} · ${esc(member.phone)} · ${items.length} session(s) · Total spent ${money(spent)}</p>
+        <p class="muted small">ID ${esc(member.id_number)} · ${esc(member.email)} · ${esc(member.phone)} · ${items.length} session(s) · ${passes.items.length} pass(es) · Total spent ${money(spent)}</p>
+        ${passes.items.length ? `<h4>Passes</h4>${passTable(passes.items, false)}` : ""}
+        <h4>Sessions</h4>
         <div class="table-wrap"><table>
-          <thead><tr><th>Receipt</th><th>Computer</th><th>Plan</th><th>Check in</th><th>Duration</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Receipt</th><th>Device</th><th>Plan</th><th>Check in</th><th>Duration</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
           <tbody>${items.length ? items.map((s) => `
             <tr>
-              <td class="mono">#${String(s.id).padStart(6, "0")}</td>
+              <td class="mono">#${num6(s.id)}</td>
               <td>${esc(s.computer_name || "—")}</td>
-              <td>${esc(s.plan_name)}</td>
+              <td>${esc(s.plan_name)}${s.pass_id ? `<div class="muted small">Pass: ${fmtMinutes(s.pass_minutes)}</div>` : ""}</td>
               <td>${fmtDateTime(s.check_in)}</td>
               <td>${s.duration_minutes != null ? fmtMinutes(s.duration_minutes) : "—"}</td>
               <td class="num">${s.total != null ? money(s.total) : "—"}</td>
@@ -533,6 +629,7 @@ async function openMemberHistory(member) {
       footer: `<button class="btn" data-close>Close</button>`,
     });
     $$("[data-receipt]", modal).forEach((b) => (b.onclick = () => openReceipt(b.dataset.receipt)));
+    $$("[data-pass-receipt]", modal).forEach((b) => (b.onclick = () => openPassReceipt(b.dataset.passReceipt)));
   });
 }
 
@@ -583,6 +680,247 @@ async function loadHistory() {
   $("#historySummary").textContent = `${items.length} session(s) shown · ${done.length} completed · ${fmtMinutes(minutes)} used · ${money(revenue)} collected`;
 }
 
+// ------------------------------------------------------------ monthly passes
+
+const PASS_BADGE = { active: "ok", upcoming: "live", "used up": "muted-badge", expired: "muted-badge", cancelled: "muted-badge" };
+const passBadge = (s) => `<span class="badge ${PASS_BADGE[s] || ""}">${esc(s)}</span>`;
+const passTotalMinutes = (plan) => Math.round(Number(plan.hours_per_day) * 60) * Number(plan.validity_days);
+
+function passRow(p, withMember = true) {
+  const pct = p.total_minutes ? Math.min(100, Math.round((p.used_minutes / p.total_minutes) * 100)) : 0;
+  const cancellable = (p.state === "active" || p.state === "upcoming") && p.used_minutes === 0;
+  return `<tr>
+    <td class="mono">#${num6(p.id)}</td>
+    ${withMember ? `<td><strong>${esc(fullName(p))}</strong><div class="muted small">ID ${esc(p.id_number)} · ${esc(p.phone)}</div></td>` : ""}
+    <td>${esc(p.plan_name)}<div class="muted small">${fmtHours(p.hours_per_day)}/day × ${p.validity_days} days</div></td>
+    <td class="nowrap">${fmtDay(p.start_date)} –<br>${fmtDay(p.end_date)}</td>
+    <td class="usage-cell"><div class="usage"><span style="width:${pct}%"></span></div><div class="muted small">${fmtMinutes(p.used_minutes)} of ${fmtMinutes(p.total_minutes)}</div></td>
+    <td class="num strong">${fmtMinutes(Math.max(0, p.remaining_minutes))}</td>
+    <td class="num">${money(p.total)}</td>
+    <td>${passBadge(p.state)}</td>
+    <td class="actions">
+      <button class="btn sm" data-act="pass-receipt" data-pass-receipt="${p.id}" data-id="${p.id}">Receipt</button>
+      ${withMember && cancellable ? `<button class="btn sm ghost danger-text" data-act="cancel-pass" data-id="${p.id}">Cancel</button>` : ""}
+    </td>
+  </tr>`;
+}
+
+function passTable(items, withMember = true) {
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Pass #</th>${withMember ? "<th>Member</th>" : ""}<th>Pass</th><th>Valid</th><th>Hours used</th><th class="num">Hours left</th><th class="num">Paid</th><th>Status</th><th></th></tr></thead>
+    <tbody>${items.map((p) => passRow(p, withMember)).join("")}</tbody>
+  </table></div>`;
+}
+
+function passParams() {
+  const p = new URLSearchParams();
+  if ($("#pState").value) p.set("state", $("#pState").value);
+  if ($("#pSearch").value.trim()) p.set("q", $("#pSearch").value.trim());
+  return p;
+}
+
+async function loadPasses() {
+  const [passes, plans] = await Promise.all([api(`/api/passes?${passParams()}`), api("/api/pass-plans"), loadLookups()]);
+  state.passes = passes.items;
+  state.passPlans = plans.items;
+  $("#passesBody").innerHTML = passes.items.length
+    ? passes.items.map((p) => passRow(p)).join("")
+    : `<tr><td colspan="9" class="empty">No passes found. Click “Sell pass” to sell one.</td></tr>`;
+  $("#passPlansBody").innerHTML = plans.items.length ? plans.items.map((pl) => `
+    <tr class="${pl.active ? "" : "dim"}">
+      <td><strong>${esc(pl.name)}</strong>${pl.description ? `<div class="muted small">${esc(pl.description)}</div>` : ""}</td>
+      <td class="num">${fmtHours(pl.hours_per_day)}</td>
+      <td class="num">${pl.validity_days} days</td>
+      <td class="num">${fmtMinutes(passTotalMinutes(pl))}</td>
+      <td class="num strong">${money(pl.price)}</td>
+      <td>${pl.active ? '<span class="badge ok">Active</span>' : '<span class="badge muted-badge">Inactive</span>'}</td>
+      <td class="actions">
+        <button class="btn sm" data-act="edit-pass-plan" data-id="${pl.id}">Edit</button>
+        <button class="btn sm ghost danger-text" data-act="delete-pass-plan" data-id="${pl.id}">Delete</button>
+      </td>
+    </tr>`).join("") : `<tr><td colspan="7" class="empty">No pass plans yet. Click “Add pass plan”.</td></tr>`;
+}
+
+async function openSellPass({ member = null, onDone = null } = {}) {
+  let plans;
+  try {
+    await ensureSettings();
+    plans = (await api("/api/pass-plans")).items.filter((p) => p.active);
+  } catch (e) { return toast(e.message, "error"); }
+  if (!plans.length) return toast("Add an active pass plan on the Passes page first.", "error");
+
+  const modal = openModal({
+    title: "Sell monthly pass",
+    body: `
+      <div class="field"><label>Member <span class="req">*</span></label>${memberPickerHtml()}</div>
+      <div id="spCurrent"></div>
+      <div class="form-grid">
+        <div class="field"><label for="spPlan">Pass</label>
+          <select id="spPlan">${plans.map((p) => `<option value="${p.id}">${esc(p.name)} — ${money(p.price)}</option>`).join("")}</select></div>
+        <div class="field"><label for="spStart">Start date</label><input id="spStart" type="date" value="${dateInputValue(new Date())}"></div>
+        <div class="field"><label for="spDiscount">Discount (${esc(state.settings.currency)})</label><input id="spDiscount" type="number" min="0" step="0.01" value="0"></div>
+        <div class="field"><label for="spPayment">Payment method</label>
+          <select id="spPayment">${state.settings.payment_methods.map((p) => `<option>${esc(p)}</option>`).join("")}</select></div>
+      </div>
+      <div id="spSummary"></div>
+      <div class="field"><label for="spNotes">Notes</label><input id="spNotes" maxlength="500" placeholder="Optional"></div>
+      <p class="form-error" hidden></p>`,
+    footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="spSubmit">Sell pass · <span id="spTotal"></span></button>`,
+  });
+
+  const summary = () => {
+    const plan = plans.find((p) => String(p.id) === $("#spPlan", modal).value);
+    const start = $("#spStart", modal).value;
+    const price = round2(plan.price);
+    const discount = Math.min(price, Math.max(0, Number($("#spDiscount", modal).value) || 0));
+    const tax = round2(((price - discount) * state.settings.tax_percent) / 100);
+    const total = round2(price - discount + tax);
+    let until = "—";
+    if (start) {
+      const [y, m, d] = start.split("-").map(Number);
+      until = fmtDay(dateInputValue(new Date(y, m - 1, d + Number(plan.validity_days) - 1)));
+    }
+    $("#spSummary", modal).innerHTML = `<table class="bill">
+      <tr><td>Hours</td><td>${fmtHours(plan.hours_per_day)}/day × ${plan.validity_days} days = <strong>${fmtMinutes(passTotalMinutes(plan))}</strong></td></tr>
+      <tr><td>Valid</td><td>${start ? fmtDay(start) : "—"} – ${until}</td></tr>
+      <tr><td>Price</td><td>${money(price)}</td></tr>
+      ${discount > 0 ? `<tr><td>Discount</td><td>− ${money(discount)}</td></tr>` : ""}
+      ${state.settings.tax_percent > 0 ? `<tr><td>Tax (${esc(state.settings.tax_percent)}%)</td><td>${money(tax)}</td></tr>` : ""}
+      <tr class="total"><td>Total</td><td>${money(total)}</td></tr>
+    </table>`;
+    $("#spTotal", modal).textContent = money(total);
+  };
+  const showCurrent = (m) => {
+    $("#spCurrent", modal).innerHTML = m && m.pass_id
+      ? `<p class="muted small">Current pass: <strong>${esc(m.pass_name)}</strong> — ${fmtMinutes(m.pass_remaining)} left, valid till ${fmtDay(m.pass_end_date)}. Its hours are used before the new pass.</p>`
+      : "";
+  };
+  const getMember = bindMemberPicker(modal, {
+    member,
+    onChange: showCurrent,
+    onNew: () => openMemberForm(null, (m) => openSellPass({ member: m, onDone })),
+  });
+  ["#spPlan", "#spStart", "#spDiscount"].forEach((id) => $(id, modal).addEventListener("input", summary));
+  summary();
+
+  $("#spSubmit", modal).onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const m = getMember();
+    if (!m) return showFormError(modal, "Select a member.");
+    btn.disabled = true;
+    try {
+      const pass = await api("/api/passes", {
+        method: "POST",
+        body: {
+          member_id: m.id, pass_plan_id: $("#spPlan", modal).value, start_date: $("#spStart", modal).value,
+          discount: $("#spDiscount", modal).value || 0, payment_method: $("#spPayment", modal).value, notes: $("#spNotes", modal).value,
+        },
+      });
+      toast(`${pass.plan_name} sold to ${fullName(pass)}.`);
+      if (onDone) onDone(pass);
+      else { refreshCurrent(); showPassReceipt(pass); }
+    } catch (e) {
+      btn.disabled = false;
+      showFormError(modal, e.message);
+    }
+  };
+}
+
+async function showPassReceipt(p) {
+  await ensureSettings();
+  const modal = openModal({
+    title: `Pass receipt #${num6(p.id)}`,
+    body: `
+      <div class="receipt">
+        ${receiptHeader("Monthly pass receipt", `Pass #${num6(p.id)} · ${fmtDateTime(p.created_at)}`)}
+        <table class="bill">
+          <tr><td>Member</td><td>${esc(fullName(p))}</td></tr>
+          <tr><td>ID number</td><td>${esc(p.id_number)}</td></tr>
+          <tr><td>Phone</td><td>${esc(p.phone)}</td></tr>
+        </table>
+        <table class="bill">
+          <tr><td>Pass</td><td>${esc(p.plan_name)}</td></tr>
+          <tr><td>Hours</td><td>${fmtHours(p.hours_per_day)}/day × ${p.validity_days} days = ${fmtMinutes(p.total_minutes)}</td></tr>
+          <tr><td>Valid</td><td>${fmtDay(p.start_date)} – ${fmtDay(p.end_date)}</td></tr>
+          <tr><td>Hours used</td><td>${fmtMinutes(p.used_minutes)}</td></tr>
+          <tr><td>Hours left</td><td>${fmtMinutes(Math.max(0, p.remaining_minutes))}</td></tr>
+          <tr><td>Price</td><td>${money(p.price)}</td></tr>
+          ${p.discount > 0 ? `<tr><td>Discount</td><td>− ${money(p.discount)}</td></tr>` : ""}
+          ${p.tax > 0 ? `<tr><td>Tax</td><td>${money(p.tax)}</td></tr>` : ""}
+          <tr class="total"><td>Total</td><td>${money(p.total)}</td></tr>
+        </table>
+        <table class="bill">
+          <tr><td>Status</td><td>${esc(p.state)}</td></tr>
+          <tr><td>Paid by</td><td>${esc(p.payment_method)}</td></tr>
+          ${p.notes ? `<tr><td>Notes</td><td>${esc(p.notes)}</td></tr>` : ""}
+        </table>
+        <p class="thanks">Thank you! Unused hours expire after ${fmtDay(p.end_date)}.</p>
+      </div>`,
+    footer: printButton(),
+  });
+  bindPrint(modal);
+}
+
+async function openPassReceipt(id) {
+  await guard(async () => showPassReceipt(await api(`/api/passes/${id}`)));
+}
+
+async function cancelPass(id) {
+  if (!(await confirmDialog("Cancel this pass? Its payment will be removed from revenue. Only unused passes can be cancelled.", { confirmText: "Cancel pass", danger: true }))) return;
+  await guard(async () => {
+    await api(`/api/passes/${id}/cancel`, { method: "POST" });
+    toast("Pass cancelled.");
+    loadPasses();
+  });
+}
+
+function openPassPlanForm(plan = null) {
+  const p = plan || { hours_per_day: 1, validity_days: 30, active: 1 };
+  const modal = openModal({
+    title: plan ? `Edit pass plan · ${plan.name}` : "New pass plan",
+    body: `
+      <form id="passPlanForm" class="form-grid" novalidate>
+        ${field("name", "Plan name", p.name, { required: true, cls: "span2", attrs: 'maxlength="60" placeholder="e.g. Monthly – 3 hrs/day"' })}
+        ${field("hours_per_day", "Hours per day", p.hours_per_day, { type: "number", required: true, attrs: 'min="0.25" max="24" step="0.25"' })}
+        ${field("validity_days", "Valid for (days)", p.validity_days, { type: "number", required: true, attrs: 'min="1" max="366" step="1"' })}
+        ${field("price", `Price (${state.settings.currency})`, p.price, { type: "number", required: true, attrs: 'min="0" step="0.01"' })}
+        ${field("description", "Description", p.description, { attrs: 'maxlength="200"' })}
+        <label class="check span2"><input type="checkbox" name="active" ${p.active ? "checked" : ""}> Available for sale</label>
+        <div class="span2 example muted small" id="passPlanExample"></div>
+        <p class="form-error span2" hidden></p>
+      </form>`,
+    footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" type="submit" form="passPlanForm">${plan ? "Save changes" : "Create plan"}</button>`,
+  });
+  const form = $("#passPlanForm", modal);
+  const example = () => {
+    const d = formData(form);
+    const minutes = passTotalMinutes({ hours_per_day: Number(d.hours_per_day) || 0, validity_days: Number(d.validity_days) || 0 });
+    const perHour = minutes ? (Number(d.price) || 0) / (minutes / 60) : 0;
+    $("#passPlanExample", modal).textContent = `${fmtHours(Number(d.hours_per_day) || 0)}/day × ${Number(d.validity_days) || 0} days = ${fmtMinutes(minutes)} in total, usable on any day · works out to ${money(perHour)} per hour`;
+  };
+  form.addEventListener("input", example);
+  example();
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const data = formData(form);
+      await (plan ? api(`/api/pass-plans/${plan.id}`, { method: "PUT", body: data }) : api("/api/pass-plans", { method: "POST", body: data }));
+      toast(plan ? "Pass plan updated." : "Pass plan created.");
+      closeModal();
+      loadPasses();
+    } catch (err) { showFormError(modal, err.message); }
+  });
+}
+
+async function deletePassPlan(plan) {
+  if (!(await confirmDialog(`Delete pass plan "${plan.name}"? Passes already sold are not affected.`, { confirmText: "Delete", danger: true }))) return;
+  await guard(async () => {
+    await api(`/api/pass-plans/${plan.id}`, { method: "DELETE" });
+    toast("Pass plan deleted.");
+    loadPasses();
+  });
+}
+
 // ------------------------------------------------------------ reports
 
 function setReportPreset(preset) {
@@ -613,10 +951,11 @@ async function loadReports() {
   const s = data.summary;
   const cards = [
     ["Revenue", money(s.revenue), "accent"],
+    ["Pass sales", `${money(s.pass_revenue)} (${s.pass_sales})`, ""],
     ["Sessions", s.sessions, ""],
     ["Time used", fmtMinutes(s.minutes), ""],
     ["Avg session", fmtMinutes(s.avg_minutes), ""],
-    ["Avg bill", money(s.avg_revenue), ""],
+    ["Avg session bill", money(s.avg_revenue), ""],
     ["Discounts", money(s.discount), ""],
     ["Tax collected", money(s.tax), ""],
   ];
@@ -772,6 +1111,9 @@ async function deleteComputer(pc) {
 async function loadSettings() {
   await loadLookups();
   $("#sLibraryName").value = state.settings.library_name;
+  $("#sAddress").value = state.settings.library_address || "";
+  $("#sPhone").value = state.settings.library_phone || "";
+  $("#sEmail").value = state.settings.library_email || "";
   $("#sDataDir").textContent = state.settings.data_dir;
   $("#sVersion").textContent = `Version ${state.settings.version}`;
 }
@@ -872,7 +1214,7 @@ function bindAuthForms() {
 // ------------------------------------------------------------ routing & events
 
 const views = {
-  dashboard: loadDashboard, members: loadMembers, history: loadHistory, reports: loadReports,
+  dashboard: loadDashboard, members: loadMembers, passes: loadPasses, history: loadHistory, reports: loadReports,
   rates: loadRates, computers: loadComputers, settings: loadSettings,
 };
 
@@ -899,6 +1241,7 @@ function bindActions(container, handlers) {
 const findMember = (id) => state.members.find((m) => m.id === id);
 const findRate = (id) => state.rates.find((r) => r.id === id);
 const findPc = (id) => state.computers.find((c) => c.id === id);
+const findPassPlan = (id) => state.passPlans.find((p) => p.id === id);
 
 function init() {
   $("#btnCheckin").onclick = () => openCheckin();
@@ -910,11 +1253,22 @@ function init() {
   bindActions($("#membersBody"), {
     checkout: openCheckout,
     checkin: (id) => openCheckin({ member: findMember(id) }),
+    "sell-pass": (id) => openSellPass({ member: findMember(id) }),
     edit: (id) => openMemberForm(findMember(id)),
     history: (id) => openMemberHistory(findMember(id)),
     delete: (id) => deleteMember(findMember(id)),
   });
   bindActions($("#historyBody"), { checkout: openCheckout, receipt: openReceipt });
+  bindActions($("#passesBody"), { "pass-receipt": openPassReceipt, "cancel-pass": cancelPass });
+  bindActions($("#passPlansBody"), {
+    "edit-pass-plan": (id) => openPassPlanForm(findPassPlan(id)),
+    "delete-pass-plan": (id) => deletePassPlan(findPassPlan(id)),
+  });
+  $("#btnSellPass").onclick = () => openSellPass();
+  $("#btnAddPassPlan").onclick = () => openPassPlanForm();
+  $("#btnExportPasses").onclick = () => saveFile(`/api/export/passes?${passParams()}`, "Passes");
+  $("#pState").addEventListener("change", () => guard(loadPasses));
+  $("#pSearch").addEventListener("input", debounce(() => guard(loadPasses)));
   bindActions($("#ratesBody"), { "edit-rate": (id) => openRateForm(findRate(id)), "delete-rate": (id) => deleteRate(findRate(id)) });
   bindActions($("#computerGrid"), {
     checkout: openCheckout,
@@ -945,7 +1299,10 @@ function init() {
   $("#settingsForm").addEventListener("submit", (e) => {
     e.preventDefault();
     guard(async () => {
-      await api("/api/settings", { method: "PUT", body: { library_name: $("#sLibraryName").value } });
+      await api("/api/settings", {
+        method: "PUT",
+        body: { library_name: $("#sLibraryName").value, library_address: $("#sAddress").value, library_phone: $("#sPhone").value, library_email: $("#sEmail").value },
+      });
       toast("Settings saved.");
       loadSettings();
     });

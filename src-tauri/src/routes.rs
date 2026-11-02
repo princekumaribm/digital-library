@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 const APP_ID: &str = "digital-library";
+const OWN_DEVICE: &str = "Own laptop";
 const PAYMENT_METHODS: [&str; 5] = ["Cash", "Card", "UPI", "Bank transfer", "Other"];
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
 const MAX_FAILED_LOGINS: u32 = 5;
@@ -174,6 +175,16 @@ pub fn dispatch(app: Option<&AppHandle>, state: &AppState, method: &str, full_pa
         ("PUT", ["rates", id]) => update_rate(&ctx, parse_id(id)?),
         ("DELETE", ["rates", id]) => delete_rate(&ctx, parse_id(id)?),
 
+        ("GET", ["pass-plans"]) => list_pass_plans(&ctx),
+        ("POST", ["pass-plans"]) => create_pass_plan(&ctx),
+        ("PUT", ["pass-plans", id]) => update_pass_plan(&ctx, parse_id(id)?),
+        ("DELETE", ["pass-plans", id]) => delete_pass_plan(&ctx, parse_id(id)?),
+
+        ("GET", ["passes"]) => list_passes(&ctx),
+        ("POST", ["passes"]) => sell_pass(&ctx),
+        ("GET", ["passes", id]) => fetch_pass(&ctx.conn()?, parse_id(id)?),
+        ("POST", ["passes", id, "cancel"]) => cancel_pass(&ctx, parse_id(id)?),
+
         ("GET", ["sessions"]) => list_sessions(&ctx),
         ("POST", ["sessions", "checkin"]) => check_in(&ctx),
         ("GET", ["sessions", id]) => fetch_session(&ctx.conn()?, parse_id(id)?),
@@ -266,7 +277,14 @@ fn dashboard(ctx: &Ctx) -> ApiResult<Value> {
         "today_minutes": one_i64(&conn,
             "SELECT COALESCE(SUM(duration_minutes), 0) FROM sessions WHERE status = 'completed' AND check_out >= ?", &since)?,
         "today_revenue": money(one_f64(&conn,
-            "SELECT COALESCE(SUM(total), 0) FROM sessions WHERE status = 'completed' AND check_out >= ?", &since)?),
+            "SELECT COALESCE(SUM(total), 0) FROM sessions WHERE status = 'completed' AND check_out >= ?", &since)?
+            + one_f64(&conn,
+            "SELECT COALESCE(SUM(total), 0) FROM member_passes WHERE status = 'active' AND created_at >= ?", &since)?),
+        "today_pass_sales": one_i64(&conn,
+            "SELECT COUNT(*) FROM member_passes WHERE status = 'active' AND created_at >= ?", &since)?,
+        "active_passes": one_i64(&conn,
+            "SELECT COUNT(*) FROM pass_status WHERE status = 'active' AND date('now', 'localtime') BETWEEN start_date AND end_date \
+             AND total_minutes > used_minutes", &[])?,
     }))
 }
 
@@ -274,6 +292,9 @@ fn get_settings(ctx: &Ctx) -> ApiResult<Value> {
     let settings = load_settings(&ctx.conn()?)?;
     Ok(json!({
         "library_name": settings["library_name"],
+        "library_address": settings["library_address"],
+        "library_phone": settings["library_phone"],
+        "library_email": settings["library_email"],
         "currency": settings["currency"],
         "tax_percent": tax_percent(&settings),
         "payment_methods": PAYMENT_METHODS,
@@ -287,6 +308,19 @@ fn update_settings(ctx: &Ctx) -> ApiResult<Value> {
     let mut updates: Vec<(&str, String)> = Vec::new();
     if body.get("library_name").is_some() {
         updates.push(("library_name", text(body, "library_name", "Library name", true, 80)?));
+    }
+    if body.get("library_address").is_some() {
+        updates.push(("library_address", text(body, "library_address", "Address", false, 300)?));
+    }
+    if body.get("library_phone").is_some() {
+        updates.push(("library_phone", text(body, "library_phone", "Phone", false, 40)?));
+    }
+    if body.get("library_email").is_some() {
+        let email = text(body, "library_email", "Email", false, 160)?;
+        if !email.is_empty() && !EMAIL_RE.is_match(&email) {
+            return Err(ApiError::new(400, "Enter a valid library email address."));
+        }
+        updates.push(("library_email", email));
     }
     if body.get("currency").is_some() {
         updates.push(("currency", text(body, "currency", "Currency symbol", true, 5)?));
@@ -315,10 +349,18 @@ fn search_clause(columns: &[&str], term: &str) -> (String, Vec<Sql>) {
 const MEMBER_SELECT: &str = "
 SELECT m.*,
     (SELECT COUNT(*) FROM sessions s WHERE s.member_id = m.id AND s.status = 'completed') AS visits,
-    (SELECT COALESCE(SUM(s.total), 0) FROM sessions s WHERE s.member_id = m.id AND s.status = 'completed') AS total_spent,
+    (SELECT COALESCE(SUM(s.total), 0) FROM sessions s WHERE s.member_id = m.id AND s.status = 'completed')
+      + (SELECT COALESCE(SUM(p.total), 0) FROM member_passes p WHERE p.member_id = m.id AND p.status = 'active') AS total_spent,
     (SELECT MAX(s.check_in) FROM sessions s WHERE s.member_id = m.id) AS last_visit,
-    (SELECT s.id FROM sessions s WHERE s.member_id = m.id AND s.status = 'active') AS active_session_id
+    (SELECT s.id FROM sessions s WHERE s.member_id = m.id AND s.status = 'active') AS active_session_id,
+    cp.id AS pass_id, cp.plan_name AS pass_name, cp.total_minutes AS pass_total,
+    cp.total_minutes - cp.used_minutes AS pass_remaining, cp.end_date AS pass_end_date
 FROM members m
+LEFT JOIN pass_status cp ON cp.id = (
+    SELECT ps.id FROM pass_status ps
+    WHERE ps.member_id = m.id AND ps.status = 'active' AND ps.total_minutes > ps.used_minutes
+      AND date('now', 'localtime') BETWEEN ps.start_date AND ps.end_date
+    ORDER BY ps.end_date, ps.id LIMIT 1)
 ";
 
 struct MemberInput {
@@ -400,6 +442,9 @@ fn delete_member(ctx: &Ctx, id: i64) -> ApiResult<Value> {
     fetch_member(&conn, id)?;
     if one_i64(&conn, "SELECT EXISTS(SELECT 1 FROM sessions WHERE member_id = ?)", &[i(id)])? != 0 {
         return Err(ApiError::new(409, "This member has session history and cannot be deleted."));
+    }
+    if one_i64(&conn, "SELECT EXISTS(SELECT 1 FROM member_passes WHERE member_id = ?)", &[i(id)])? != 0 {
+        return Err(ApiError::new(409, "This member has bought passes and cannot be deleted."));
     }
     conn.execute("DELETE FROM members WHERE id = ?1", params![id])?;
     Ok(json!({"ok": true}))
@@ -553,6 +598,8 @@ fn delete_rate(ctx: &Ctx, id: i64) -> ApiResult<Value> {
 
 // ---------------------------------------------------------------- billing
 
+/// Bills a session. The plan's minimum and rounding give the counted time; with a pass, the counted time is
+/// taken from the pass first and only what the pass can't cover is charged.
 pub fn compute_bill(session: &Value, end: DateTime<Utc>, discount: f64) -> ApiResult<Value> {
     let start = session["check_in"]
         .as_str()
@@ -561,7 +608,11 @@ pub fn compute_bill(session: &Value, end: DateTime<Utc>, discount: f64) -> ApiRe
     let elapsed = (end - start).num_seconds().max(0);
     let used = (elapsed + 59) / 60;
     let step = as_i64(&session["increment_minutes"]).max(1);
-    let billable = (((used + step - 1) / step) * step).max(as_i64(&session["minimum_minutes"]));
+    let counted = (((used + step - 1) / step) * step).max(as_i64(&session["minimum_minutes"]));
+    // Minutes left on the pass before this session (only completed sessions are counted).
+    let pass_left = (!session["pass_id"].is_null()).then(|| as_i64(&session["pass_remaining"]).max(0));
+    let pass_minutes = pass_left.map_or(0, |left| counted.min(left));
+    let billable = counted - pass_minutes;
     let mut subtotal = money(billable as f64 * as_f64(&session["rate_per_hour"]) / 60.0);
     let max_charge = as_f64(&session["max_charge"]);
     if max_charge > 0.0 {
@@ -573,6 +624,10 @@ pub fn compute_bill(session: &Value, end: DateTime<Utc>, discount: f64) -> ApiRe
         "check_out": iso(end),
         "elapsed_seconds": elapsed,
         "used_minutes": used,
+        "counted_minutes": counted,
+        "pass_minutes": pass_minutes,
+        "extra_minutes": billable,
+        "pass_balance": pass_left.map(|left| left - pass_minutes),
         "billable_minutes": billable,
         "subtotal": subtotal,
         "discount": discount,
@@ -584,8 +639,10 @@ pub fn compute_bill(session: &Value, end: DateTime<Utc>, discount: f64) -> ApiRe
 // ---------------------------------------------------------------- sessions
 
 const SESSION_SELECT: &str = "
-SELECT s.*, m.first_name, m.last_name, m.email, m.phone, m.id_number
+SELECT s.*, m.first_name, m.last_name, m.email, m.phone, m.id_number,
+       ps.plan_name AS pass_name, ps.total_minutes - ps.used_minutes AS pass_remaining
 FROM sessions s JOIN members m ON m.id = s.member_id
+LEFT JOIN pass_status ps ON ps.id = s.pass_id
 ";
 
 fn fetch_session(conn: &Connection, id: i64) -> ApiResult<Value> {
@@ -646,6 +703,7 @@ fn check_in(ctx: &Ctx) -> ApiResult<Value> {
     let member_id = integer(body, "member_id", "Member", 1.0, 4.6e18, None)?;
     let computer_id = optional_id(body, "computer_id", "Computer")?;
     let rate_plan_id = optional_id(body, "rate_plan_id", "Rate plan")?;
+    let use_pass = boolean(body, "use_pass", false);
     let notes = text(body, "notes", "Notes", false, 500)?;
     let mut conn = ctx.conn()?;
     let tx = conn.transaction()?;
@@ -655,8 +713,13 @@ fn check_in(ctx: &Ctx) -> ApiResult<Value> {
         return Err(ApiError::new(409, format!(
             "{} {} is already checked in.", member["first_name"].as_str().unwrap_or(""), member["last_name"].as_str().unwrap_or(""))));
     }
+    let pass_id = if use_pass {
+        Some(member["pass_id"].as_i64().ok_or_else(|| ApiError::new(409, "This member has no valid pass with hours left."))?)
+    } else {
+        None
+    };
 
-    let mut computer_name = String::new();
+    let mut computer_name = OWN_DEVICE.to_string();
     if let Some(id) = computer_id {
         let computer = fetch_computer(&tx, id)?;
         let name = computer["name"].as_str().unwrap_or_default().to_string();
@@ -685,12 +748,12 @@ fn check_in(ctx: &Ctx) -> ApiResult<Value> {
     let tax = tax_percent(&load_settings(&tx)?);
     tx.execute(
         "INSERT INTO sessions (member_id, computer_id, computer_name, rate_plan_id, plan_name, rate_per_hour, \
-         minimum_minutes, increment_minutes, max_charge, tax_percent, check_in, notes) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         minimum_minutes, increment_minutes, max_charge, tax_percent, check_in, notes, pass_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             member_id, computer_id, computer_name, as_i64(&plan["id"]), plan["name"].as_str().unwrap_or_default(),
             as_f64(&plan["rate_per_hour"]), as_i64(&plan["minimum_minutes"]), as_i64(&plan["increment_minutes"]),
-            as_f64(&plan["max_charge"]), tax, iso(now_utc()), notes
+            as_f64(&plan["max_charge"]), tax, iso(now_utc()), notes, pass_id
         ],
     )?;
     let session = fetch_session(&tx, tx.last_insert_rowid())?;
@@ -722,12 +785,12 @@ fn check_out(ctx: &Ctx, id: i64) -> ApiResult<Value> {
     let bill = compute_bill(&session, now_utc(), discount)?;
     let changed = conn.execute(
         "UPDATE sessions SET check_out = ?1, duration_minutes = ?2, billable_minutes = ?3, subtotal = ?4, \
-         discount = ?5, tax = ?6, total = ?7, payment_method = ?8, notes = ?9, status = 'completed' \
-         WHERE id = ?10 AND status = 'active'",
+         discount = ?5, tax = ?6, total = ?7, payment_method = ?8, notes = ?9, status = 'completed', \
+         pass_minutes = ?11, pass_balance = ?12 WHERE id = ?10 AND status = 'active'",
         params![
             bill["check_out"].as_str(), as_i64(&bill["used_minutes"]), as_i64(&bill["billable_minutes"]),
             as_f64(&bill["subtotal"]), as_f64(&bill["discount"]), as_f64(&bill["tax"]), as_f64(&bill["total"]),
-            payment, notes, id
+            payment, notes, id, as_i64(&bill["pass_minutes"]), bill["pass_balance"].as_i64()
         ],
     )?;
     if changed == 0 {
@@ -750,6 +813,193 @@ fn cancel_session(ctx: &Ctx, id: i64) -> ApiResult<Value> {
     fetch_session(&conn, id)
 }
 
+// ---------------------------------------------------------------- monthly passes
+
+const PASS_SELECT: &str = "
+SELECT p.*, p.total_minutes - p.used_minutes AS remaining_minutes,
+       m.first_name, m.last_name, m.email, m.phone, m.id_number
+FROM pass_status p JOIN members m ON m.id = p.member_id
+";
+
+fn today_local() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn with_pass_state(mut pass: Value, today: &str) -> Value {
+    let start = pass["start_date"].as_str().unwrap_or_default();
+    let end = pass["end_date"].as_str().unwrap_or_default();
+    let state = if pass["status"] == "cancelled" {
+        "cancelled"
+    } else if start > today {
+        "upcoming"
+    } else if end < today {
+        "expired"
+    } else if as_i64(&pass["remaining_minutes"]) <= 0 {
+        "used up"
+    } else {
+        "active"
+    };
+    pass["state"] = json!(state);
+    pass
+}
+
+fn fetch_pass(conn: &Connection, id: i64) -> ApiResult<Value> {
+    let pass = row(conn, &format!("{PASS_SELECT} WHERE p.id = ?"), &[i(id)])?
+        .ok_or_else(|| ApiError::new(404, "Pass not found."))?;
+    Ok(with_pass_state(pass, &today_local()))
+}
+
+fn pass_filters(ctx: &Ctx) -> (String, Vec<Sql>) {
+    let mut clauses = Vec::new();
+    let mut args = Vec::new();
+    if let Ok(member_id) = ctx.q("member_id").parse::<i64>() {
+        clauses.push("p.member_id = ?".to_string());
+        args.push(i(member_id));
+    }
+    let term = ctx.q("q");
+    if !term.is_empty() {
+        let (clause, extra) = search_clause(
+            &["m.first_name", "m.last_name", "m.first_name || ' ' || m.last_name", "m.phone", "m.id_number", "p.plan_name"],
+            &term,
+        );
+        clauses.push(clause);
+        args.extend(extra);
+    }
+    let sql = if clauses.is_empty() { String::new() } else { format!(" WHERE {}", clauses.join(" AND ")) };
+    (sql, args)
+}
+
+fn list_passes(ctx: &Ctx) -> ApiResult<Value> {
+    let (filter, args) = pass_filters(ctx);
+    let today = today_local();
+    let wanted = ctx.q("state");
+    let items: Vec<Value> = rows(&ctx.conn()?, &format!("{PASS_SELECT}{filter} ORDER BY p.created_at DESC LIMIT 2000"), &args)?
+        .into_iter()
+        .map(|p| with_pass_state(p, &today))
+        .filter(|p| wanted.is_empty() || p["state"] == wanted.as_str())
+        .collect();
+    Ok(json!({"items": items}))
+}
+
+fn sell_pass(ctx: &Ctx) -> ApiResult<Value> {
+    let body = &ctx.body;
+    let member_id = integer(body, "member_id", "Member", 1.0, 4.6e18, None)?;
+    let plan_id = integer(body, "pass_plan_id", "Pass", 1.0, 4.6e18, None)?;
+    let start_text = text(body, "start_date", "Start date", false, 10)?;
+    let start = if start_text.is_empty() {
+        chrono::Local::now().date_naive()
+    } else {
+        chrono::NaiveDate::parse_from_str(&start_text, "%Y-%m-%d").map_err(|_| ApiError::new(400, "Enter a valid start date."))?
+    };
+    let discount = number(body, "discount", "Discount", 0.0, 1e9, Some(0.0))?;
+    let payment = text(body, "payment_method", "Payment method", true, 30)?;
+    if !PAYMENT_METHODS.contains(&payment.as_str()) {
+        return Err(ApiError::new(400, "Choose a valid payment method."));
+    }
+    let notes = text(body, "notes", "Notes", false, 500)?;
+
+    let mut conn = ctx.conn()?;
+    let tx = conn.transaction()?;
+    fetch_member(&tx, member_id)?;
+    let plan = fetch_pass_plan(&tx, plan_id)?;
+    if as_i64(&plan["active"]) == 0 {
+        return Err(ApiError::new(409, "This pass is no longer offered."));
+    }
+    let days = as_i64(&plan["validity_days"]).max(1);
+    let hours = as_f64(&plan["hours_per_day"]);
+    let total_minutes = (hours * 60.0).round() as i64 * days;
+    let end = start + ChronoDuration::days(days - 1);
+    let price = money(as_f64(&plan["price"]));
+    let discount = money(discount.min(price));
+    let tax = money((price - discount) * tax_percent(&load_settings(&tx)?) / 100.0);
+    let total = money(price - discount + tax);
+    tx.execute(
+        "INSERT INTO member_passes (member_id, pass_plan_id, plan_name, hours_per_day, validity_days, total_minutes, \
+         start_date, end_date, price, discount, tax, total, payment_method, notes, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![
+            member_id, plan_id, plan["name"].as_str().unwrap_or_default(), hours, days, total_minutes,
+            start.format("%Y-%m-%d").to_string(), end.format("%Y-%m-%d").to_string(),
+            price, discount, tax, total, payment, notes, iso(now_utc())
+        ],
+    )?;
+    let pass = fetch_pass(&tx, tx.last_insert_rowid())?;
+    tx.commit()?;
+    Ok(pass)
+}
+
+fn cancel_pass(ctx: &Ctx, id: i64) -> ApiResult<Value> {
+    let conn = ctx.conn()?;
+    let pass = fetch_pass(&conn, id)?;
+    if pass["status"] == "cancelled" {
+        return Err(ApiError::new(409, "This pass is already cancelled."));
+    }
+    let in_use = one_i64(&conn, "SELECT EXISTS(SELECT 1 FROM sessions WHERE pass_id = ? AND status = 'active')", &[i(id)])? != 0;
+    if as_i64(&pass["used_minutes"]) > 0 || in_use {
+        return Err(ApiError::new(409, "This pass has already been used, so it can't be cancelled."));
+    }
+    conn.execute("UPDATE member_passes SET status = 'cancelled' WHERE id = ?1", params![id])?;
+    fetch_pass(&conn, id)
+}
+
+struct PassPlanInput {
+    name: String,
+    description: String,
+    hours_per_day: f64,
+    validity_days: i64,
+    price: f64,
+    active: bool,
+}
+
+fn pass_plan_input(body: &Value) -> ApiResult<PassPlanInput> {
+    Ok(PassPlanInput {
+        name: text(body, "name", "Pass name", true, 60)?,
+        description: text(body, "description", "Description", false, 200)?,
+        hours_per_day: number(body, "hours_per_day", "Hours per day", 0.25, 24.0, None)?,
+        validity_days: integer(body, "validity_days", "Valid for (days)", 1.0, 366.0, Some(30.0))?,
+        price: number(body, "price", "Price", 0.0, 1e7, None)?,
+        active: boolean(body, "active", true),
+    })
+}
+
+fn fetch_pass_plan(conn: &Connection, id: i64) -> ApiResult<Value> {
+    row(conn, "SELECT * FROM pass_plans WHERE id = ?", &[i(id)])?.ok_or_else(|| ApiError::new(404, "Pass plan not found."))
+}
+
+fn list_pass_plans(ctx: &Ctx) -> ApiResult<Value> {
+    Ok(json!({"items": rows(&ctx.conn()?,
+        "SELECT * FROM pass_plans ORDER BY active DESC, hours_per_day, name COLLATE NOCASE", &[])?}))
+}
+
+fn create_pass_plan(ctx: &Ctx) -> ApiResult<Value> {
+    let p = pass_plan_input(&ctx.body)?;
+    let conn = ctx.conn()?;
+    conn.execute(
+        "INSERT INTO pass_plans (name, description, hours_per_day, validity_days, price, active) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![p.name, p.description, p.hours_per_day, p.validity_days, p.price, i64::from(p.active)],
+    )?;
+    fetch_pass_plan(&conn, conn.last_insert_rowid())
+}
+
+fn update_pass_plan(ctx: &Ctx, id: i64) -> ApiResult<Value> {
+    let p = pass_plan_input(&ctx.body)?;
+    let conn = ctx.conn()?;
+    fetch_pass_plan(&conn, id)?;
+    conn.execute(
+        "UPDATE pass_plans SET name = ?1, description = ?2, hours_per_day = ?3, validity_days = ?4, price = ?5, active = ?6 \
+         WHERE id = ?7",
+        params![p.name, p.description, p.hours_per_day, p.validity_days, p.price, i64::from(p.active), id],
+    )?;
+    fetch_pass_plan(&conn, id)
+}
+
+fn delete_pass_plan(ctx: &Ctx, id: i64) -> ApiResult<Value> {
+    let conn = ctx.conn()?;
+    fetch_pass_plan(&conn, id)?;
+    conn.execute("DELETE FROM pass_plans WHERE id = ?1", params![id])?;
+    Ok(json!({"ok": true}))
+}
+
 // ---------------------------------------------------------------- reports
 
 #[derive(Default)]
@@ -759,7 +1009,7 @@ struct Buckets {
 }
 
 impl Buckets {
-    fn add(&mut self, key: String, minutes: i64, revenue: f64, member_id: Option<i64>) {
+    fn add(&mut self, key: String, sessions: i64, minutes: i64, revenue: f64, member_id: Option<i64>) {
         let idx = *self.index.entry(key.clone()).or_insert_with(|| {
             let mut entry = json!({"name": key, "sessions": 0, "minutes": 0, "revenue": 0.0});
             if let Some(id) = member_id {
@@ -769,7 +1019,7 @@ impl Buckets {
             self.order.len() - 1
         });
         let entry = &mut self.order[idx];
-        entry["sessions"] = json!(as_i64(&entry["sessions"]) + 1);
+        entry["sessions"] = json!(as_i64(&entry["sessions"]) + sessions);
         entry["minutes"] = json!(as_i64(&entry["minutes"]) + minutes);
         entry["revenue"] = json!(as_f64(&entry["revenue"]) + revenue);
     }
@@ -793,9 +1043,15 @@ impl Buckets {
 fn reports(ctx: &Ctx) -> ApiResult<Value> {
     let start = query_date(&ctx.query, "from")?.unwrap_or_else(local_midnight_utc);
     let end = query_date(&ctx.query, "to")?.unwrap_or_else(|| now_utc() + ChronoDuration::days(1));
+    let conn = ctx.conn()?;
     let items = rows(
-        &ctx.conn()?,
+        &conn,
         &format!("{SESSION_SELECT} WHERE s.status = 'completed' AND s.check_out >= ? AND s.check_out < ? ORDER BY s.check_out"),
+        &[t(iso(start)), t(iso(end))],
+    )?;
+    let pass_sales = rows(
+        &conn,
+        &format!("{PASS_SELECT} WHERE p.status = 'active' AND p.created_at >= ? AND p.created_at < ? ORDER BY p.created_at"),
         &[t(iso(start)), t(iso(end))],
     )?;
 
@@ -815,15 +1071,33 @@ fn reports(ctx: &Ctx) -> ApiResult<Value> {
             "{} {} ({})",
             s["first_name"].as_str().unwrap_or(""), s["last_name"].as_str().unwrap_or(""), s["id_number"].as_str().unwrap_or("")
         );
-        by_day.add(local_day(&s["check_out"]), used, total, None);
-        by_payment.add(s["payment_method"].as_str().unwrap_or("Unknown").to_string(), used, total, None);
-        by_plan.add(s["plan_name"].as_str().unwrap_or_default().to_string(), used, total, None);
-        by_member.add(member, used, total, Some(as_i64(&s["member_id"])));
+        by_day.add(local_day(&s["check_out"]), 1, used, total, None);
+        by_payment.add(s["payment_method"].as_str().unwrap_or("Unknown").to_string(), 1, used, total, None);
+        by_plan.add(s["plan_name"].as_str().unwrap_or_default().to_string(), 1, used, total, None);
+        by_member.add(member, 1, used, total, Some(as_i64(&s["member_id"])));
     }
     let count = items.len();
-    let revenue = money(revenue);
+    let session_revenue = money(revenue);
+    let mut pass_revenue = 0.0;
+    for p in &pass_sales {
+        let total = as_f64(&p["total"]);
+        pass_revenue += total;
+        subtotal += as_f64(&p["price"]);
+        discount += as_f64(&p["discount"]);
+        tax += as_f64(&p["tax"]);
+        let member = format!(
+            "{} {} ({})",
+            p["first_name"].as_str().unwrap_or(""), p["last_name"].as_str().unwrap_or(""), p["id_number"].as_str().unwrap_or("")
+        );
+        by_day.add(local_day(&p["created_at"]), 0, 0, total, None);
+        by_payment.add(p["payment_method"].as_str().unwrap_or("Unknown").to_string(), 0, 0, total, None);
+        by_plan.add(format!("Pass: {}", p["plan_name"].as_str().unwrap_or_default()), 0, 0, total, None);
+        by_member.add(member, 0, 0, total, Some(as_i64(&p["member_id"])));
+    }
+    let pass_revenue = money(pass_revenue);
+    let revenue = money(session_revenue + pass_revenue);
     let (avg_minutes, avg_revenue) = if count > 0 {
-        ((minutes as f64 / count as f64 * 10.0).round() / 10.0, money(revenue / count as f64))
+        ((minutes as f64 / count as f64 * 10.0).round() / 10.0, money(session_revenue / count as f64))
     } else {
         (0.0, 0.0)
     };
@@ -833,6 +1107,7 @@ fn reports(ctx: &Ctx) -> ApiResult<Value> {
         "summary": {
             "sessions": count, "minutes": minutes, "billable_minutes": billable,
             "subtotal": money(subtotal), "discount": money(discount), "tax": money(tax), "revenue": revenue,
+            "session_revenue": session_revenue, "pass_sales": pass_sales.len(), "pass_revenue": pass_revenue,
             "avg_minutes": avg_minutes, "avg_revenue": avg_revenue,
         },
         "by_day": by_day.finish(true, None),
@@ -900,13 +1175,30 @@ fn export_csv(ctx: &Ctx, kind: &str) -> ApiResult<Value> {
                 cell(&s["id"]), cell(&s["first_name"]), cell(&s["last_name"]), cell(&s["id_number"]), cell(&s["phone"]),
                 cell(&s["email"]), cell(&s["computer_name"]), cell(&s["plan_name"]), cell(&s["rate_per_hour"]),
                 local_text(&s["check_in"]), local_text(&s["check_out"]), cell(&s["duration_minutes"]),
+                cell(&s["pass_name"]), cell(&s["pass_minutes"]),
                 cell(&s["billable_minutes"]), cell(&s["subtotal"]), cell(&s["discount"]), cell(&s["tax"]),
                 cell(&s["total"]), cell(&s["payment_method"]), cell(&s["status"]), cell(&s["notes"]),
             ]).collect();
             (format!("sessions-{today}.csv"), csv_bytes(
                 &["Receipt #", "First name", "Last name", "ID number", "Phone", "Email", "Computer", "Plan",
-                  "Rate per hour", "Check in", "Check out", "Minutes used", "Minutes billed", "Subtotal", "Discount",
-                  "Tax", "Total", "Payment", "Status", "Notes"], data)?)
+                  "Rate per hour", "Check in", "Check out", "Minutes used", "Pass", "Minutes from pass",
+                  "Minutes billed", "Subtotal", "Discount", "Tax", "Total", "Payment", "Status", "Notes"], data)?)
+        }
+        "passes" => {
+            let (filter, args) = pass_filters(ctx);
+            let today_iso = today_local();
+            let items = rows(&conn, &format!("{PASS_SELECT}{filter} ORDER BY p.created_at DESC"), &args)?;
+            let data = items.into_iter().map(|p| with_pass_state(p, &today_iso)).map(|p| vec![
+                cell(&p["id"]), cell(&p["first_name"]), cell(&p["last_name"]), cell(&p["id_number"]), cell(&p["phone"]),
+                cell(&p["plan_name"]), cell(&p["hours_per_day"]), cell(&p["start_date"]), cell(&p["end_date"]),
+                cell(&p["total_minutes"]), cell(&p["used_minutes"]), cell(&p["remaining_minutes"]), cell(&p["price"]),
+                cell(&p["discount"]), cell(&p["tax"]), cell(&p["total"]), cell(&p["payment_method"]),
+                cell(&p["state"]), local_text(&p["created_at"]), cell(&p["notes"]),
+            ]).collect();
+            (format!("passes-{today}.csv"), csv_bytes(
+                &["Pass #", "First name", "Last name", "ID number", "Phone", "Pass", "Hours per day", "Valid from",
+                  "Valid until", "Total minutes", "Minutes used", "Minutes left", "Price", "Discount", "Tax", "Total",
+                  "Payment", "Status", "Sold on", "Notes"], data)?)
         }
         _ => return Err(ApiError::new(404, "Not found.")),
     };
@@ -1109,6 +1401,77 @@ mod tests {
         call(&state, "POST", "/api/auth/change-password", json!({"username": "admin", "current_password": "Admin@123", "new_password": "Fresh#2026"})).unwrap();
         let status = call(&state, "POST", "/api/auth/login", json!({"username": "admin", "password": "Fresh#2026"})).unwrap();
         assert_eq!(status["default_password"], json!(false));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pass_minutes_are_used_before_charging() {
+        let start = parse_iso("2026-10-27T10:00:00Z").unwrap();
+        let session = |remaining: i64| json!({"check_in": "2026-10-27T10:00:00Z", "increment_minutes": 15,
+            "minimum_minutes": 30, "rate_per_hour": 60.0, "max_charge": 0.0, "tax_percent": 0.0,
+            "pass_id": 1, "pass_remaining": remaining});
+        let bill = |remaining: i64, minutes: i64| compute_bill(&session(remaining), start + ChronoDuration::minutes(minutes), 0.0).unwrap();
+
+        let covered = bill(120, 90);
+        assert_eq!((covered["pass_minutes"].clone(), covered["total"].clone(), covered["pass_balance"].clone()), (json!(90), json!(0.0), json!(30)));
+        // The 30-minute minimum and 15-minute rounding also apply to time taken from a pass.
+        let short = bill(120, 10);
+        assert_eq!((short["pass_minutes"].clone(), short["total"].clone(), short["pass_balance"].clone()), (json!(30), json!(0.0), json!(90)));
+        assert_eq!(bill(120, 47)["pass_minutes"], json!(60));
+        let partly = bill(60, 90);
+        assert_eq!((partly["extra_minutes"].clone(), partly["billable_minutes"].clone(), partly["total"].clone()), (json!(30), json!(30), json!(30.0)));
+        // Counted time 30 min, 20 from the pass, 10 charged.
+        let topped_up = bill(20, 10);
+        assert_eq!((topped_up["pass_minutes"].clone(), topped_up["billable_minutes"].clone(), topped_up["total"].clone()), (json!(20), json!(10), json!(10.0)));
+        // An exhausted pass bills like a normal session.
+        assert_eq!(bill(0, 10)["total"], json!(30.0));
+    }
+
+    #[test]
+    fn monthly_pass_workflow() {
+        let (state, dir) = test_state();
+        call(&state, "POST", "/api/auth/login", json!({"username": "admin", "password": "Admin@123"})).unwrap();
+        let settings = call(&state, "GET", "/api/settings", json!({})).unwrap();
+        assert_eq!(settings["library_name"], json!("Shivam Digital Library"));
+        assert_eq!(settings["library_address"], json!("Ordely Bazar, Varanasi"));
+        assert_eq!(call(&state, "PUT", "/api/settings", json!({"library_email": "not-an-email"})).unwrap_err().status, 400);
+
+        let member = call(&state, "POST", "/api/members", json!({
+            "first_name": "Neha", "last_name": "S", "email": "n@s.com", "phone": "9876500000", "id_number": "P-1"})).unwrap();
+        let mid = member["id"].clone();
+        assert_eq!(call(&state, "POST", "/api/sessions/checkin", json!({"member_id": mid, "use_pass": true})).unwrap_err().status, 409);
+
+        let plans = call(&state, "GET", "/api/pass-plans", json!({})).unwrap();
+        let two_hours = plans["items"].as_array().unwrap().iter().find(|p| p["hours_per_day"] == json!(2.0)).unwrap().clone();
+        let pass = call(&state, "POST", "/api/passes", json!({"member_id": mid, "pass_plan_id": two_hours["id"], "payment_method": "UPI"})).unwrap();
+        assert_eq!((pass["total_minutes"].clone(), pass["remaining_minutes"].clone(), pass["state"].clone()), (json!(3600), json!(3600), json!("active")));
+        assert_eq!(pass["end_date"].as_str().unwrap() > pass["start_date"].as_str().unwrap(), true);
+
+        let listed = call(&state, "GET", &format!("/api/members/{mid}"), json!({})).unwrap();
+        assert_eq!(listed["pass_remaining"], json!(3600));
+
+        let session = call(&state, "POST", "/api/sessions/checkin", json!({"member_id": mid, "use_pass": true})).unwrap();
+        assert_eq!(session["computer_name"], json!("Own laptop"));
+        assert_eq!(session["pass_id"], pass["id"]);
+        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/cancel", pass["id"]), json!({})).unwrap_err().status, 409);
+        let done = call(&state, "POST", &format!("/api/sessions/{}/checkout", session["id"]), json!({"payment_method": "Cash"})).unwrap();
+        // Even a very short visit counts the 30-minute minimum against the pass.
+        assert_eq!((done["total"].clone(), done["pass_minutes"].clone(), done["pass_balance"].clone()), (json!(0.0), json!(30), json!(3570)));
+        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/cancel", pass["id"]), json!({})).unwrap_err().status, 409);
+
+        let report = call(&state, "GET", "/api/reports", json!({})).unwrap();
+        assert_eq!((report["summary"]["pass_sales"].clone(), report["summary"]["pass_revenue"].clone()), (json!(1), json!(1000.0)));
+        assert_eq!(report["summary"]["revenue"], json!(1000.0));
+        assert_eq!(call(&state, "GET", "/api/dashboard", json!({})).unwrap()["active_passes"], json!(1));
+
+        // An unused pass sold by mistake can be cancelled and drops out of revenue.
+        let one_hour = plans["items"].as_array().unwrap().iter().find(|p| p["hours_per_day"] == json!(1.0)).unwrap().clone();
+        let mistake = call(&state, "POST", "/api/passes", json!({"member_id": mid, "pass_plan_id": one_hour["id"], "payment_method": "Cash"})).unwrap();
+        let cancelled = call(&state, "POST", &format!("/api/passes/{}/cancel", mistake["id"]), json!({})).unwrap();
+        assert_eq!(cancelled["state"], json!("cancelled"));
+        assert_eq!(call(&state, "GET", "/api/reports", json!({})).unwrap()["summary"]["revenue"], json!(1000.0));
+        assert_eq!(call(&state, "GET", &format!("/api/members/{mid}"), json!({})).unwrap()["pass_remaining"], json!(3570));
 
         let _ = std::fs::remove_dir_all(dir);
     }
