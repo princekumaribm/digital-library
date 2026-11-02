@@ -183,7 +183,7 @@ pub fn dispatch(app: Option<&AppHandle>, state: &AppState, method: &str, full_pa
         ("GET", ["passes"]) => list_passes(&ctx),
         ("POST", ["passes"]) => sell_pass(&ctx),
         ("GET", ["passes", id]) => fetch_pass(&ctx.conn()?, parse_id(id)?),
-        ("POST", ["passes", id, "cancel"]) => cancel_pass(&ctx, parse_id(id)?),
+        ("POST", ["passes", id, "void"]) => void_pass(&ctx, parse_id(id)?),
 
         ("GET", ["sessions"]) => list_sessions(&ctx),
         ("POST", ["sessions", "checkin"]) => check_in(&ctx),
@@ -193,6 +193,7 @@ pub fn dispatch(app: Option<&AppHandle>, state: &AppState, method: &str, full_pa
         ("POST", ["sessions", id, "cancel"]) => cancel_session(&ctx, parse_id(id)?),
 
         ("GET", ["reports"]) => reports(&ctx),
+        ("GET", ["daily-summary"]) => daily_summary(&ctx),
         ("POST", ["export", kind]) => export_csv(&ctx, kind),
         ("POST", ["backup"]) => save_backup(&ctx),
         ("POST", ["restore"]) => restore_backup(&ctx),
@@ -829,7 +830,7 @@ fn with_pass_state(mut pass: Value, today: &str) -> Value {
     let start = pass["start_date"].as_str().unwrap_or_default();
     let end = pass["end_date"].as_str().unwrap_or_default();
     let state = if pass["status"] == "cancelled" {
-        "cancelled"
+        "voided"
     } else if start > today {
         "upcoming"
     } else if end < today {
@@ -928,17 +929,25 @@ fn sell_pass(ctx: &Ctx) -> ApiResult<Value> {
     Ok(pass)
 }
 
-fn cancel_pass(ctx: &Ctx, id: i64) -> ApiResult<Value> {
+/// Voiding keeps the sale on record (with reason and time) but removes it from revenue.
+fn void_pass(ctx: &Ctx, id: i64) -> ApiResult<Value> {
+    let reason = text(&ctx.body, "reason", "Reason", true, 200)?;
+    if reason.chars().count() < 3 {
+        return Err(ApiError::new(400, "Please enter a reason (at least 3 characters)."));
+    }
     let conn = ctx.conn()?;
     let pass = fetch_pass(&conn, id)?;
     if pass["status"] == "cancelled" {
-        return Err(ApiError::new(409, "This pass is already cancelled."));
+        return Err(ApiError::new(409, "This pass is already voided."));
     }
     let in_use = one_i64(&conn, "SELECT EXISTS(SELECT 1 FROM sessions WHERE pass_id = ? AND status = 'active')", &[i(id)])? != 0;
     if as_i64(&pass["used_minutes"]) > 0 || in_use {
-        return Err(ApiError::new(409, "This pass has already been used, so it can't be cancelled."));
+        return Err(ApiError::new(409, "This pass has already been used, so it can't be voided."));
     }
-    conn.execute("UPDATE member_passes SET status = 'cancelled' WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE member_passes SET status = 'cancelled', void_reason = ?1, voided_at = ?2 WHERE id = ?3 AND status = 'active'",
+        params![reason, iso(now_utc()), id],
+    )?;
     fetch_pass(&conn, id)
 }
 
@@ -1054,6 +1063,16 @@ fn reports(ctx: &Ctx) -> ApiResult<Value> {
         &format!("{PASS_SELECT} WHERE p.status = 'active' AND p.created_at >= ? AND p.created_at < ? ORDER BY p.created_at"),
         &[t(iso(start)), t(iso(end))],
     )?;
+    let today = today_local();
+    let voided: Vec<Value> = rows(
+        &conn,
+        &format!("{PASS_SELECT} WHERE p.status = 'cancelled' AND p.voided_at >= ? AND p.voided_at < ? ORDER BY p.voided_at"),
+        &[t(iso(start)), t(iso(end))],
+    )?
+    .into_iter()
+    .map(|p| with_pass_state(p, &today))
+    .collect();
+    let voided_amount = money(voided.iter().map(|p| as_f64(&p["total"])).sum());
 
     let (mut by_day, mut by_payment, mut by_plan, mut by_member) =
         (Buckets::default(), Buckets::default(), Buckets::default(), Buckets::default());
@@ -1108,8 +1127,10 @@ fn reports(ctx: &Ctx) -> ApiResult<Value> {
             "sessions": count, "minutes": minutes, "billable_minutes": billable,
             "subtotal": money(subtotal), "discount": money(discount), "tax": money(tax), "revenue": revenue,
             "session_revenue": session_revenue, "pass_sales": pass_sales.len(), "pass_revenue": pass_revenue,
+            "voided_count": voided.len(), "voided_amount": voided_amount,
             "avg_minutes": avg_minutes, "avg_revenue": avg_revenue,
         },
+        "voided": voided,
         "by_day": by_day.finish(true, None),
         "by_payment": by_payment.finish(false, None),
         "by_plan": by_plan.finish(false, None),
@@ -1117,18 +1138,158 @@ fn reports(ctx: &Ctx) -> ApiResult<Value> {
     }))
 }
 
+// ---------------------------------------------------------------- daily summary
+
+fn daily_summary(ctx: &Ctx) -> ApiResult<Value> {
+    let date_text = ctx.q("date");
+    let date = if date_text.is_empty() {
+        chrono::Local::now().date_naive()
+    } else {
+        chrono::NaiveDate::parse_from_str(&date_text, "%Y-%m-%d").map_err(|_| ApiError::new(400, "Enter a valid date."))?
+    };
+    let (start, end) = local_day_range(date);
+    let range = [t(iso(start)), t(iso(end))];
+    let conn = ctx.conn()?;
+    let sessions = rows(
+        &conn,
+        &format!("{SESSION_SELECT} WHERE s.status = 'completed' AND s.check_out >= ? AND s.check_out < ? ORDER BY s.check_out"),
+        &range,
+    )?;
+    let passes = rows(
+        &conn,
+        &format!("{PASS_SELECT} WHERE p.status = 'active' AND p.created_at >= ? AND p.created_at < ? ORDER BY p.created_at"),
+        &range,
+    )?;
+    let today = today_local();
+    let voided: Vec<Value> = rows(
+        &conn,
+        &format!("{PASS_SELECT} WHERE p.status = 'cancelled' AND p.voided_at >= ? AND p.voided_at < ? ORDER BY p.voided_at"),
+        &range,
+    )?
+    .into_iter()
+    .map(|p| with_pass_state(p, &today))
+    .collect();
+    let cancelled_sessions = one_i64(
+        &conn,
+        "SELECT COUNT(*) FROM sessions WHERE status = 'cancelled' AND check_out >= ? AND check_out < ?",
+        &range,
+    )?;
+    let settings = load_settings(&conn)?;
+
+    let mut by_payment = Buckets::default();
+    let (mut minutes, mut session_revenue, mut pass_revenue, mut discount, mut tax) = (0i64, 0.0, 0.0, 0.0, 0.0);
+    for s in &sessions {
+        let total = as_f64(&s["total"]);
+        minutes += as_i64(&s["duration_minutes"]);
+        session_revenue += total;
+        discount += as_f64(&s["discount"]);
+        tax += as_f64(&s["tax"]);
+        by_payment.add(s["payment_method"].as_str().unwrap_or("Unknown").to_string(), 1, 0, total, None);
+    }
+    for p in &passes {
+        let total = as_f64(&p["total"]);
+        pass_revenue += total;
+        discount += as_f64(&p["discount"]);
+        tax += as_f64(&p["tax"]);
+        by_payment.add(p["payment_method"].as_str().unwrap_or("Unknown").to_string(), 1, 0, total, None);
+    }
+    let (session_revenue, pass_revenue) = (money(session_revenue), money(pass_revenue));
+    Ok(json!({
+        "date": date.format("%Y-%m-%d").to_string(),
+        "generated_at": iso(now_utc()),
+        "library": {
+            "name": settings["library_name"], "address": settings["library_address"],
+            "phone": settings["library_phone"], "email": settings["library_email"],
+        },
+        "summary": {
+            "sessions": sessions.len(), "minutes": minutes, "session_revenue": session_revenue,
+            "pass_sales": passes.len(), "pass_revenue": pass_revenue,
+            "discount": money(discount), "tax": money(tax), "total": money(session_revenue + pass_revenue),
+            "cancelled_sessions": cancelled_sessions, "voided_count": voided.len(),
+            "voided_amount": money(voided.iter().map(|p| as_f64(&p["total"])).sum()),
+        },
+        "by_payment": by_payment.finish(false, None),
+        "sessions": sessions,
+        "passes": passes,
+        "voided": voided,
+    }))
+}
+
+fn daily_summary_csv(ctx: &Ctx) -> ApiResult<(String, Vec<u8>)> {
+    let d = daily_summary(ctx)?;
+    let s = &d["summary"];
+    let line = |label: &str, value: &Value| vec![label.to_string(), cell(value)];
+    let mut records: Vec<Vec<String>> = vec![
+        vec!["Daily summary".into(), cell(&d["library"]["name"])],
+        line("Date", &d["date"]),
+        vec!["Generated".into(), local_text(&d["generated_at"])],
+        vec![],
+        line("Sessions", &s["sessions"]),
+        line("Time used (minutes)", &s["minutes"]),
+        line("Session income", &s["session_revenue"]),
+        line("Passes sold", &s["pass_sales"]),
+        line("Pass income", &s["pass_revenue"]),
+        line("Discounts given", &s["discount"]),
+        line("Tax", &s["tax"]),
+        line("TOTAL COLLECTED", &s["total"]),
+        line("Cancelled sessions (no charge)", &s["cancelled_sessions"]),
+        line("Voided passes", &s["voided_count"]),
+        line("Voided amount (not counted)", &s["voided_amount"]),
+        vec![],
+        vec!["By payment method".into(), "Count".into(), "Amount".into()],
+    ];
+    for p in d["by_payment"].as_array().into_iter().flatten() {
+        records.push(vec![cell(&p["name"]), cell(&p["sessions"]), cell(&p["revenue"])]);
+    }
+    records.push(vec![]);
+    records.push(["Receipt #", "Checked out", "Member", "ID number", "Device", "Plan", "Minutes used", "From pass (min)", "Total", "Payment"]
+        .iter().map(|h| h.to_string()).collect());
+    for x in d["sessions"].as_array().into_iter().flatten() {
+        records.push(vec![
+            cell(&x["id"]), local_text(&x["check_out"]), format!("{} {}", cell(&x["first_name"]), cell(&x["last_name"])),
+            cell(&x["id_number"]), cell(&x["computer_name"]), cell(&x["plan_name"]), cell(&x["duration_minutes"]),
+            cell(&x["pass_minutes"]), cell(&x["total"]), cell(&x["payment_method"]),
+        ]);
+    }
+    records.push(vec![]);
+    records.push(["Pass #", "Sold at", "Member", "ID number", "Pass", "Total", "Payment"].iter().map(|h| h.to_string()).collect());
+    for x in d["passes"].as_array().into_iter().flatten() {
+        records.push(vec![
+            cell(&x["id"]), local_text(&x["created_at"]), format!("{} {}", cell(&x["first_name"]), cell(&x["last_name"])),
+            cell(&x["id_number"]), cell(&x["plan_name"]), cell(&x["total"]), cell(&x["payment_method"]),
+        ]);
+    }
+    records.push(vec![]);
+    records.push(["Voided pass #", "Sold at", "Voided at", "Member", "Pass", "Amount", "Reason"].iter().map(|h| h.to_string()).collect());
+    for x in d["voided"].as_array().into_iter().flatten() {
+        records.push(vec![
+            cell(&x["id"]), local_text(&x["created_at"]), local_text(&x["voided_at"]),
+            format!("{} {}", cell(&x["first_name"]), cell(&x["last_name"])), cell(&x["plan_name"]), cell(&x["total"]),
+            cell(&x["void_reason"]),
+        ]);
+    }
+    records.push(vec![]);
+    records.push(vec!["Closed by".into(), String::new()]);
+    Ok((format!("daily-summary-{}.csv", cell(&d["date"])), csv_records(records)?))
+}
+
 // ---------------------------------------------------------------- files
 
-fn csv_bytes(header: &[&str], data: Vec<Vec<String>>) -> ApiResult<Vec<u8>> {
+fn csv_records(records: Vec<Vec<String>>) -> ApiResult<Vec<u8>> {
     // Neutralise spreadsheet formula injection.
     let safe = |v: String| if v.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{v}") } else { v };
-    let mut writer = csv::Writer::from_writer(Vec::from("\u{feff}".as_bytes()));
     let fail = |e: csv::Error| ApiError::new(500, format!("Could not create the CSV file: {e}"));
-    writer.write_record(header).map_err(fail)?;
-    for record in data {
+    let mut writer = csv::WriterBuilder::new().flexible(true).from_writer(Vec::from("\u{feff}".as_bytes()));
+    for record in records {
         writer.write_record(record.into_iter().map(safe)).map_err(fail)?;
     }
     writer.into_inner().map_err(|e| ApiError::new(500, format!("Could not create the CSV file: {e}")))
+}
+
+fn csv_bytes(header: &[&str], data: Vec<Vec<String>>) -> ApiResult<Vec<u8>> {
+    let mut records = vec![header.iter().map(|h| h.to_string()).collect()];
+    records.extend(data);
+    csv_records(records)
 }
 
 fn cell(value: &Value) -> String {
@@ -1194,12 +1355,14 @@ fn export_csv(ctx: &Ctx, kind: &str) -> ApiResult<Value> {
                 cell(&p["total_minutes"]), cell(&p["used_minutes"]), cell(&p["remaining_minutes"]), cell(&p["price"]),
                 cell(&p["discount"]), cell(&p["tax"]), cell(&p["total"]), cell(&p["payment_method"]),
                 cell(&p["state"]), local_text(&p["created_at"]), cell(&p["notes"]),
+                local_text(&p["voided_at"]), cell(&p["void_reason"]),
             ]).collect();
             (format!("passes-{today}.csv"), csv_bytes(
                 &["Pass #", "First name", "Last name", "ID number", "Phone", "Pass", "Hours per day", "Valid from",
                   "Valid until", "Total minutes", "Minutes used", "Minutes left", "Price", "Discount", "Tax", "Total",
-                  "Payment", "Status", "Sold on", "Notes"], data)?)
+                  "Payment", "Status", "Sold on", "Notes", "Voided at", "Void reason"], data)?)
         }
+        "daily-summary" => daily_summary_csv(ctx)?,
         _ => return Err(ApiError::new(404, "Not found.")),
     };
     let Some(path) = save_dialog(ctx, &file_name, "CSV spreadsheet", "csv")? else {
@@ -1454,24 +1617,43 @@ mod tests {
         let session = call(&state, "POST", "/api/sessions/checkin", json!({"member_id": mid, "use_pass": true})).unwrap();
         assert_eq!(session["computer_name"], json!("Own laptop"));
         assert_eq!(session["pass_id"], pass["id"]);
-        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/cancel", pass["id"]), json!({})).unwrap_err().status, 409);
+        let void_body = json!({"reason": "Sold by mistake"});
+        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/void", pass["id"]), void_body.clone()).unwrap_err().status, 409);
         let done = call(&state, "POST", &format!("/api/sessions/{}/checkout", session["id"]), json!({"payment_method": "Cash"})).unwrap();
         // Even a very short visit counts the 30-minute minimum against the pass.
         assert_eq!((done["total"].clone(), done["pass_minutes"].clone(), done["pass_balance"].clone()), (json!(0.0), json!(30), json!(3570)));
-        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/cancel", pass["id"]), json!({})).unwrap_err().status, 409);
+        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/void", pass["id"]), void_body.clone()).unwrap_err().status, 409);
 
         let report = call(&state, "GET", "/api/reports", json!({})).unwrap();
         assert_eq!((report["summary"]["pass_sales"].clone(), report["summary"]["pass_revenue"].clone()), (json!(1), json!(1000.0)));
         assert_eq!(report["summary"]["revenue"], json!(1000.0));
         assert_eq!(call(&state, "GET", "/api/dashboard", json!({})).unwrap()["active_passes"], json!(1));
 
-        // An unused pass sold by mistake can be cancelled and drops out of revenue.
+        // An unused pass sold by mistake can be voided with a reason: kept on record, excluded from revenue.
         let one_hour = plans["items"].as_array().unwrap().iter().find(|p| p["hours_per_day"] == json!(1.0)).unwrap().clone();
         let mistake = call(&state, "POST", "/api/passes", json!({"member_id": mid, "pass_plan_id": one_hour["id"], "payment_method": "Cash"})).unwrap();
-        let cancelled = call(&state, "POST", &format!("/api/passes/{}/cancel", mistake["id"]), json!({})).unwrap();
-        assert_eq!(cancelled["state"], json!("cancelled"));
-        assert_eq!(call(&state, "GET", "/api/reports", json!({})).unwrap()["summary"]["revenue"], json!(1000.0));
+        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/void", mistake["id"]), json!({"reason": ""})).unwrap_err().status, 400);
+        let voided = call(&state, "POST", &format!("/api/passes/{}/void", mistake["id"]), void_body.clone()).unwrap();
+        assert_eq!((voided["state"].clone(), voided["void_reason"].clone()), (json!("voided"), json!("Sold by mistake")));
+        assert!(voided["voided_at"].is_string());
+        assert_eq!(call(&state, "POST", &format!("/api/passes/{}/void", mistake["id"]), void_body).unwrap_err().status, 409);
+
+        let report = call(&state, "GET", "/api/reports", json!({})).unwrap();
+        assert_eq!(report["summary"]["revenue"], json!(1000.0));
+        assert_eq!((report["summary"]["voided_count"].clone(), report["summary"]["voided_amount"].clone()), (json!(1), json!(600.0)));
+        assert_eq!(report["voided"][0]["void_reason"], json!("Sold by mistake"));
         assert_eq!(call(&state, "GET", &format!("/api/members/{mid}"), json!({})).unwrap()["pass_remaining"], json!(3570));
+
+        let day = call(&state, "GET", "/api/daily-summary", json!({})).unwrap();
+        let s = &day["summary"];
+        assert_eq!((s["sessions"].clone(), s["pass_sales"].clone(), s["total"].clone()), (json!(1), json!(1), json!(1000.0)));
+        assert_eq!((s["voided_count"].clone(), s["voided_amount"].clone()), (json!(1), json!(600.0)));
+        let upi = day["by_payment"].as_array().unwrap().iter().find(|p| p["name"] == "UPI").unwrap();
+        assert_eq!((upi["sessions"].clone(), upi["revenue"].clone()), (json!(1), json!(1000.0)));
+        assert_eq!(day["library"]["address"], json!("Ordely Bazar, Varanasi"));
+        let empty = call(&state, "GET", "/api/daily-summary?date=2020-01-01", json!({})).unwrap();
+        assert_eq!(empty["summary"]["total"], json!(0.0));
+        assert_eq!(call(&state, "GET", "/api/daily-summary?date=nope", json!({})).unwrap_err().status, 400);
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -682,13 +682,13 @@ async function loadHistory() {
 
 // ------------------------------------------------------------ monthly passes
 
-const PASS_BADGE = { active: "ok", upcoming: "live", "used up": "muted-badge", expired: "muted-badge", cancelled: "muted-badge" };
+const PASS_BADGE = { active: "ok", upcoming: "live", "used up": "muted-badge", expired: "muted-badge", voided: "void-badge" };
 const passBadge = (s) => `<span class="badge ${PASS_BADGE[s] || ""}">${esc(s)}</span>`;
 const passTotalMinutes = (plan) => Math.round(Number(plan.hours_per_day) * 60) * Number(plan.validity_days);
 
 function passRow(p, withMember = true) {
   const pct = p.total_minutes ? Math.min(100, Math.round((p.used_minutes / p.total_minutes) * 100)) : 0;
-  const cancellable = (p.state === "active" || p.state === "upcoming") && p.used_minutes === 0;
+  const voidable = (p.state === "active" || p.state === "upcoming") && p.used_minutes === 0;
   return `<tr>
     <td class="mono">#${num6(p.id)}</td>
     ${withMember ? `<td><strong>${esc(fullName(p))}</strong><div class="muted small">ID ${esc(p.id_number)} · ${esc(p.phone)}</div></td>` : ""}
@@ -697,10 +697,10 @@ function passRow(p, withMember = true) {
     <td class="usage-cell"><div class="usage"><span style="width:${pct}%"></span></div><div class="muted small">${fmtMinutes(p.used_minutes)} of ${fmtMinutes(p.total_minutes)}</div></td>
     <td class="num strong">${fmtMinutes(Math.max(0, p.remaining_minutes))}</td>
     <td class="num">${money(p.total)}</td>
-    <td>${passBadge(p.state)}</td>
+    <td>${passBadge(p.state)}${p.state === "voided" ? `<div class="muted small void-note">${fmtDateTime(p.voided_at)}<br>${esc(p.void_reason)}</div>` : ""}</td>
     <td class="actions">
       <button class="btn sm" data-act="pass-receipt" data-pass-receipt="${p.id}" data-id="${p.id}">Receipt</button>
-      ${withMember && cancellable ? `<button class="btn sm ghost danger-text" data-act="cancel-pass" data-id="${p.id}">Cancel</button>` : ""}
+      ${withMember && voidable ? `<button class="btn sm ghost danger-text" data-act="void-pass" data-id="${p.id}">Void</button>` : ""}
     </td>
   </tr>`;
 }
@@ -833,6 +833,7 @@ async function showPassReceipt(p) {
     body: `
       <div class="receipt">
         ${receiptHeader("Monthly pass receipt", `Pass #${num6(p.id)} · ${fmtDateTime(p.created_at)}`)}
+        ${p.state === "voided" ? `<div class="void-stamp">VOIDED · ${fmtDateTime(p.voided_at)}<div>Reason: ${esc(p.void_reason)}</div></div>` : ""}
         <table class="bill">
           <tr><td>Member</td><td>${esc(fullName(p))}</td></tr>
           <tr><td>ID number</td><td>${esc(p.id_number)}</td></tr>
@@ -854,7 +855,7 @@ async function showPassReceipt(p) {
           <tr><td>Paid by</td><td>${esc(p.payment_method)}</td></tr>
           ${p.notes ? `<tr><td>Notes</td><td>${esc(p.notes)}</td></tr>` : ""}
         </table>
-        <p class="thanks">Thank you! Unused hours expire after ${fmtDay(p.end_date)}.</p>
+        ${p.state === "voided" ? "" : `<p class="thanks">Thank you! Unused hours expire after ${fmtDay(p.end_date)}.</p>`}
       </div>`,
     footer: printButton(),
   });
@@ -865,13 +866,34 @@ async function openPassReceipt(id) {
   await guard(async () => showPassReceipt(await api(`/api/passes/${id}`)));
 }
 
-async function cancelPass(id) {
-  if (!(await confirmDialog("Cancel this pass? Its payment will be removed from revenue. Only unused passes can be cancelled.", { confirmText: "Cancel pass", danger: true }))) return;
-  await guard(async () => {
-    await api(`/api/passes/${id}/cancel`, { method: "POST" });
-    toast("Pass cancelled.");
-    loadPasses();
+function voidPass(id) {
+  const p = state.passes.find((x) => x.id === id);
+  const modal = openModal({
+    title: `Void pass #${num6(id)}`,
+    body: `
+      ${p ? `<p><strong>${esc(fullName(p))}</strong> · ${esc(p.plan_name)} · ${money(p.total)} paid by ${esc(p.payment_method)}</p>` : ""}
+      <p class="muted small">The sale stays on record as <strong>Voided</strong> with your reason and the date and time, and is no longer counted in revenue. Only passes that haven't been used can be voided. This cannot be undone.</p>
+      <div class="field"><label for="voidReason">Reason <span class="req">*</span></label>
+        <textarea id="voidReason" rows="2" maxlength="200" placeholder="e.g. Sold to the wrong member, refund given"></textarea></div>
+      <p class="form-error" hidden></p>`,
+    footer: `<button class="btn" data-close>Back</button><button class="btn danger" id="voidOk">Void pass</button>`,
   });
+  $("#voidReason", modal).focus();
+  $("#voidOk", modal).onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    const reason = $("#voidReason", modal).value.trim();
+    if (reason.length < 3) return showFormError(modal, "Enter a reason (at least 3 characters).");
+    btn.disabled = true;
+    try {
+      await api(`/api/passes/${id}/void`, { method: "POST", body: { reason } });
+      toast("Pass voided.");
+      closeModal();
+      loadPasses();
+    } catch (e) {
+      btn.disabled = false;
+      showFormError(modal, e.message);
+    }
+  };
 }
 
 function openPassPlanForm(plan = null) {
@@ -958,6 +980,7 @@ async function loadReports() {
     ["Avg session bill", money(s.avg_revenue), ""],
     ["Discounts", money(s.discount), ""],
     ["Tax collected", money(s.tax), ""],
+    ["Voided passes", `${money(s.voided_amount)} (${s.voided_count})`, s.voided_count ? "warn" : ""],
   ];
   $("#reportStats").innerHTML = cards.map(([l, v, c]) => `<div class="stat ${c}"><div class="stat-label">${l}</div><div class="stat-value">${esc(v)}</div></div>`).join("");
   const common = [
@@ -969,6 +992,73 @@ async function loadReports() {
   $("#rByPayment").innerHTML = reportTable(data.by_payment, [{ label: "Method", fmt: (r) => esc(r.name) }, ...common]);
   $("#rByPlan").innerHTML = reportTable(data.by_plan, [{ label: "Plan", fmt: (r) => esc(r.name) }, ...common]);
   $("#rTopMembers").innerHTML = reportTable(data.top_members, [{ label: "Member", fmt: (r) => esc(r.name) }, ...common]);
+  $("#rVoided").innerHTML = data.voided.length ? `<div class="table-wrap"><table>
+    <thead><tr><th>Pass #</th><th>Member</th><th>Pass</th><th class="num">Amount</th><th>Sold</th><th>Voided</th><th>Reason</th></tr></thead>
+    <tbody>${data.voided.map((p) => `<tr>
+      <td class="mono">#${num6(p.id)}</td><td>${esc(fullName(p))}</td><td>${esc(p.plan_name)}</td>
+      <td class="num">${money(p.total)}</td><td class="nowrap">${fmtDateTime(p.created_at)}</td>
+      <td class="nowrap">${fmtDateTime(p.voided_at)}</td><td>${esc(p.void_reason)}</td></tr>`).join("")}</tbody>
+  </table></div>` : `<p class="empty">No passes voided in this period.</p>`;
+}
+
+// ------------------------------------------------------------ daily summary (closing report)
+
+const fmtTime = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { timeStyle: "short" }) : "—");
+
+async function openDailySummary(date = dateInputValue(new Date())) {
+  let d;
+  try {
+    await ensureSettings();
+    d = await api(`/api/daily-summary?date=${encodeURIComponent(date)}`);
+  } catch (e) { return toast(e.message, "error"); }
+  const s = d.summary;
+  const table = (head, body, empty) => body.length
+    ? `<table class="ds-table"><thead><tr>${head}</tr></thead><tbody>${body.join("")}</tbody></table>`
+    : `<p class="muted small">${empty}</p>`;
+  const modal = openModal({
+    title: "Daily summary",
+    wide: true,
+    body: `
+      <div class="toolbar"><label class="inline">Day <input type="date" id="dsDate" value="${esc(d.date)}" max="${dateInputValue(new Date())}"></label></div>
+      <div class="receipt wide-print">
+        ${receiptHeader("Daily summary", `${fmtDay(d.date)} · generated ${fmtDateTime(d.generated_at)}`)}
+        <div class="ds-grid">
+          <table class="bill">
+            <tr><td>Sessions</td><td>${s.sessions} · ${fmtMinutes(s.minutes)}</td></tr>
+            <tr><td>Session income</td><td>${money(s.session_revenue)}</td></tr>
+            <tr><td>Passes sold</td><td>${s.pass_sales}</td></tr>
+            <tr><td>Pass income</td><td>${money(s.pass_revenue)}</td></tr>
+            ${s.discount > 0 ? `<tr><td>Discounts given</td><td>${money(s.discount)}</td></tr>` : ""}
+            ${s.tax > 0 ? `<tr><td>Tax included</td><td>${money(s.tax)}</td></tr>` : ""}
+            <tr class="total"><td>Total collected</td><td>${money(s.total)}</td></tr>
+          </table>
+          ${table("<th>Payment</th><th class='num'>Count</th><th class='num'>Amount</th>",
+            d.by_payment.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${p.sessions}</td><td class="num">${money(p.revenue)}</td></tr>`),
+            "No payments.")}
+        </div>
+        <p class="muted small">Cancelled sessions (no charge): ${s.cancelled_sessions} · Voided passes: ${s.voided_count}${s.voided_count ? ` (${money(s.voided_amount)}, not counted)` : ""}</p>
+        <h4>Sessions</h4>
+        ${table("<th>#</th><th>Out</th><th>Member</th><th>Device</th><th class='num'>Used</th><th class='num'>Amount</th><th>Paid by</th>",
+          d.sessions.map((x) => `<tr><td class="mono">${num6(x.id)}</td><td class="nowrap">${fmtTime(x.check_out)}</td><td>${esc(fullName(x))}</td>
+            <td>${esc(x.computer_name || "—")}</td><td class="num">${fmtMinutes(x.duration_minutes)}${x.pass_minutes ? `<div class="muted small">${fmtMinutes(x.pass_minutes)} pass</div>` : ""}</td>
+            <td class="num">${money(x.total)}</td><td>${esc(x.payment_method || "—")}</td></tr>`),
+          "No sessions checked out on this day.")}
+        <h4>Passes sold</h4>
+        ${table("<th>#</th><th>Time</th><th>Member</th><th>Pass</th><th class='num'>Amount</th><th>Paid by</th>",
+          d.passes.map((x) => `<tr><td class="mono">${num6(x.id)}</td><td class="nowrap">${fmtTime(x.created_at)}</td><td>${esc(fullName(x))}</td>
+            <td>${esc(x.plan_name)}</td><td class="num">${money(x.total)}</td><td>${esc(x.payment_method)}</td></tr>`),
+          "No passes sold on this day.")}
+        ${d.voided.length ? `<h4>Voided passes (not counted)</h4>
+          ${table("<th>#</th><th>Voided</th><th>Member</th><th class='num'>Amount</th><th>Reason</th>",
+            d.voided.map((x) => `<tr><td class="mono">${num6(x.id)}</td><td class="nowrap">${fmtTime(x.voided_at)}</td><td>${esc(fullName(x))}</td>
+              <td class="num">${money(x.total)}</td><td>${esc(x.void_reason)}</td></tr>`), "")}` : ""}
+        <div class="signature"><span>Cash counted: ____________</span><span>Closed by: ____________</span><span>Signature: ____________</span></div>
+      </div>`,
+    footer: `<button class="btn" data-close>Close</button><button class="btn" id="dsSave">Save CSV</button><button class="btn primary" id="btnPrint">Print / Save PDF</button>`,
+  });
+  $("#dsDate", modal).addEventListener("change", (e) => { if (e.target.value) openDailySummary(e.target.value); });
+  $("#dsSave", modal).onclick = () => saveFile(`/api/export/daily-summary?date=${encodeURIComponent(d.date)}`, "Daily summary");
+  bindPrint(modal);
 }
 
 // ------------------------------------------------------------ rate card
@@ -1245,6 +1335,8 @@ const findPassPlan = (id) => state.passPlans.find((p) => p.id === id);
 
 function init() {
   $("#btnCheckin").onclick = () => openCheckin();
+  $("#btnDaySummary").onclick = () => openDailySummary();
+  $("#btnDaySummary2").onclick = () => openDailySummary($("#rTo").value || undefined);
   $("#btnAddMember").onclick = () => openMemberForm();
   $("#btnAddRate").onclick = () => openRateForm();
   $("#btnAddComputer").onclick = () => openComputerForm();
@@ -1259,7 +1351,7 @@ function init() {
     delete: (id) => deleteMember(findMember(id)),
   });
   bindActions($("#historyBody"), { checkout: openCheckout, receipt: openReceipt });
-  bindActions($("#passesBody"), { "pass-receipt": openPassReceipt, "cancel-pass": cancelPass });
+  bindActions($("#passesBody"), { "pass-receipt": openPassReceipt, "void-pass": voidPass });
   bindActions($("#passPlansBody"), {
     "edit-pass-plan": (id) => openPassPlanForm(findPassPlan(id)),
     "delete-pass-plan": (id) => deletePassPlan(findPassPlan(id)),

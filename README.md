@@ -36,7 +36,8 @@ It's a native desktop app for **macOS and Windows**: double-click it and it open
 | **Check-out** | Shows the full bill: time used, billable time, subtotal, discount, tax and total. Pick a payment method (Cash, Card, UPI, Bank transfer, Other) and get a printable receipt. |
 | **Rate card** | Create multiple plans (e.g. Standard, Student, Senior Citizen) with hourly rate, minimum charge, rounding increment and optional maximum charge. Choose the default plan, set tax % and currency, and use the built-in price calculator. |
 | **History** | Every session with filters (date range, status, search), receipts, and CSV export. |
-| **Reports** | Revenue, sessions, usage time, average bill, discounts and tax for any date range, broken down by day, payment method, rate plan and top members. |
+| **Reports** | Revenue, sessions, usage time, average bill, discounts and tax for any date range, broken down by day, payment method, rate plan and top members. Voided pass sales are listed with their reason, date and time. |
+| **Daily summary** | A closing report for any day: totals, totals by payment method, every transaction, and voided passes. Print it, save it as PDF, or save it as CSV. |
 | **Computers** | Add, rename, disable or remove workstations, and see at a glance which are free or in use. |
 | **Settings** | Library name, address, phone and email (printed on receipts with the logo), password change, save and restore backups, and CSV exports. |
 
@@ -216,9 +217,9 @@ A pass gives a member a **pool of hours** for a period, by default 30 days from 
 | Upcoming | Start date is in the future |
 | Used up | All hours used |
 | Expired | The end date has passed. Unused hours lapse. |
-| Cancelled | Cancelled; not counted in revenue |
+| Voided | Voided with a reason; kept on record but not counted in revenue |
 
-- A pass can be **cancelled** only if it hasn't been used yet, for example if it was sold by mistake.
+- A pass can be **voided** only if it hasn't been used yet, for example if it was sold to the wrong member. Click **Void**, enter a **reason** (required) and confirm. The pass isn't deleted: it stays in the Passes list (filter **Voided**), on the member's history and in **Reports → Voided pass sales** with the amount, the date and time it was voided and the reason. Its receipt is stamped **VOIDED**. Voiding cannot be undone.
 - If a member has more than one valid pass, the one that expires first is used first.
 - **Pass plans** (at the bottom of the Passes page) set the name, hours per day, number of days and price. Changing a plan doesn't affect passes already sold.
 - Pass sales count toward revenue on the Dashboard and in Reports.
@@ -237,6 +238,24 @@ Pick a preset (Today, Last 7 days, Last 30 days, This month) or a custom date ra
 
 - Revenue (sessions and pass sales), pass sales, number of sessions, total and average time, average session bill, discounts and tax collected.
 - Breakdown by **day**, **payment method**, **rate plan** (passes appear as "Pass: …"), and the **top 10 members**.
+- **Voided passes**: count and amount (not included in revenue), plus a **Voided pass sales** table with pass number, member, amount, when it was sold, when it was voided and the reason.
+
+### Daily summary (closing report)
+
+At closing time, click **Day summary** on the Dashboard (or on Reports) to get the day's record. Pick another date to see an earlier day. The summary shows:
+
+- Sessions and time used, session income, passes sold and pass income, discounts, tax and the **total collected**.
+- Totals **by payment method** (Cash, UPI, Card, …), to match against the cash drawer and UPI statement.
+- Every session checked out and every pass sold that day, with times, members and amounts.
+- Cancelled sessions and **voided passes** (with reasons), which are not counted in the total.
+- Lines for *Cash counted*, *Closed by* and *Signature*.
+
+Keep a record outside the app:
+
+- **Print / Save PDF** prints it on paper, or choose **Save as PDF** in the print dialog to keep a file.
+- **Save CSV** saves a spreadsheet file (`daily-summary-YYYY-MM-DD.csv`) that opens in Excel or Numbers.
+
+The summary uses the same rules as Reports: sessions count on their check-out day, passes on their sale day, and voided passes on the day they were voided.
 
 ### Managing computers
 
@@ -508,7 +527,7 @@ git push origin v1.0.1
 | `sessions` | Check-ins/check-outs | `member_id`, `computer_id`, `check_in`, `check_out`, `status` (`active`/`completed`/`cancelled`), billing results (`duration_minutes`, `billable_minutes`, `subtotal`, `discount`, `tax`, `total`, `payment_method`) |
 | `settings` | Key/value settings | `library_name`, `library_address`, `library_phone`, `library_email`, `currency`, `tax_percent` |
 | `pass_plans` | Monthly pass offers | `name`, `hours_per_day`, `validity_days`, `price`, `active` |
-| `member_passes` | Passes sold | `member_id`, `plan_name`, `total_minutes`, `start_date`, `end_date` (local dates, inclusive), `price`, `discount`, `tax`, `total`, `payment_method`, `status` (`active`/`cancelled`) |
+| `member_passes` | Passes sold | `member_id`, `plan_name`, `total_minutes`, `start_date`, `end_date` (local dates, inclusive), `price`, `discount`, `tax`, `total`, `payment_method`, `status` (`active`/`cancelled`; `cancelled` means voided), `void_reason`, `voided_at` |
 | `pass_status` *(view)* | Pass usage | All `member_passes` columns plus `used_minutes` (sum of `sessions.pass_minutes`) |
 
 - Each session stores a **snapshot** of the plan and tax at check-in (`plan_name`, `rate_per_hour`, `minimum_minutes`, `increment_minutes`, `max_charge`, `tax_percent`, `computer_name`). Later rate-card changes therefore never alter running or past sessions.
@@ -552,14 +571,16 @@ await window.__TAURI__.core.invoke("api", { method: "GET", path: "/api/members?q
 | GET | `/api/sessions/{id}/quote?discount=` | Bill preview for an active session |
 | POST | `/api/sessions/{id}/checkout` | `payment_method`, optional `discount`, `notes`. Returns the completed session |
 | POST | `/api/sessions/{id}/cancel` | End without charge |
-| GET | `/api/reports?from=&to=` | Summary and breakdowns (sessions by check-out time, pass sales by sale time) |
+| GET | `/api/reports?from=&to=` | Summary and breakdowns (sessions by check-out time, pass sales by sale time) plus `voided` passes (by void time) |
+| GET | `/api/daily-summary?date=YYYY-MM-DD` | Closing report for one local day (default today): `summary`, `by_payment`, `sessions`, `passes`, `voided` |
 | GET / POST | `/api/pass-plans` | List / create pass plan: `name`, `hours_per_day`, `validity_days`, `price`, `description`, `active` |
 | PUT / DELETE | `/api/pass-plans/{id}` | Update / delete pass plan (sold passes keep their own copy) |
-| GET | `/api/passes?member_id=&q=&state=` | List passes with `used_minutes`, `remaining_minutes` and `state` (active/upcoming/used up/expired/cancelled) |
+| GET | `/api/passes?member_id=&q=&state=` | List passes with `used_minutes`, `remaining_minutes` and `state` (active/upcoming/used up/expired/voided) |
 | POST | `/api/passes` | Sell: `member_id`, `pass_plan_id`, optional `start_date` (YYYY-MM-DD), `discount`, `payment_method`, `notes` |
 | GET | `/api/passes/{id}` | One pass (used for pass receipts) |
-| POST | `/api/passes/{id}/cancel` | Cancel an unused pass |
+| POST | `/api/passes/{id}/void` | Void an unused pass: `reason` (required, 3–200 characters). The pass is kept with `void_reason` and `voided_at` |
 | POST | `/api/export/passes?…` | Save passes CSV |
+| POST | `/api/export/daily-summary?date=` | Save the daily summary CSV |
 | POST | `/api/export/members` | Shows a Save dialog and writes the members CSV. Returns `{saved}` or `{cancelled}` |
 | POST | `/api/export/sessions?…` | Same for sessions (same filters as `/api/sessions`) |
 | POST | `/api/backup` | Shows a Save dialog and writes a copy of the database |

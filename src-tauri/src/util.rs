@@ -34,12 +34,16 @@ pub fn parse_iso(value: &str) -> Option<DateTime<Utc>> {
 }
 
 pub fn local_midnight_utc() -> DateTime<Utc> {
-    let midnight = Local::now().date_naive().and_hms_opt(0, 0, 0).expect("valid midnight");
-    Local
-        .from_local_datetime(&midnight)
-        .earliest()
-        .unwrap_or_else(Local::now)
-        .with_timezone(&Utc)
+    local_day_range(Local::now().date_naive()).0
+}
+
+/// Start and end (exclusive) of a local calendar day, in UTC.
+pub fn local_day_range(date: chrono::NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
+    let midnight = |d: chrono::NaiveDate| {
+        let naive = d.and_hms_opt(0, 0, 0).expect("valid midnight");
+        Local.from_local_datetime(&naive).earliest().map_or_else(|| Utc.from_utc_datetime(&naive), |dt| dt.with_timezone(&Utc))
+    };
+    (midnight(date), midnight(date.succ_opt().unwrap_or(date)))
 }
 
 pub fn local_text(value: &Value) -> String {

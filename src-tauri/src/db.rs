@@ -119,10 +119,12 @@ CREATE INDEX IF NOT EXISTS member_passes_member ON member_passes(member_id);
 CREATE INDEX IF NOT EXISTS member_passes_created ON member_passes(created_at);
 "#;
 
-// Added in 2.1; created after the sessions columns exist.
+// Added in 2.1; created after the sessions columns exist. The view is recreated so it
+// picks up columns added to member_passes later (p.* is expanded when a view is created).
 const PASS_OBJECTS: &str = r#"
 CREATE INDEX IF NOT EXISTS sessions_pass ON sessions(pass_id);
-CREATE VIEW IF NOT EXISTS pass_status AS
+DROP VIEW IF EXISTS pass_status;
+CREATE VIEW pass_status AS
 SELECT p.*,
     COALESCE((SELECT SUM(s.pass_minutes) FROM sessions s WHERE s.pass_id = p.id AND s.status = 'completed'), 0) AS used_minutes
 FROM member_passes p;
@@ -143,20 +145,17 @@ pub fn init(path: &Path) -> ApiResult<()> {
     conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
     let tx = conn.transaction()?;
     tx.execute_batch(SCHEMA)?;
-    let session_columns: Vec<String> = {
-        let mut stmt = tx.prepare("PRAGMA table_info(sessions)")?;
-        let names = stmt.query_map([], |r| r.get::<_, String>(1))?.collect::<Result<_, _>>()?;
-        names
-    };
-    for (column, definition) in [
-        ("pass_id", "INTEGER REFERENCES member_passes(id)"),
-        ("pass_minutes", "INTEGER NOT NULL DEFAULT 0"),
-        ("pass_balance", "INTEGER"),
-    ] {
-        if !session_columns.iter().any(|c| c == column) {
-            tx.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {column} {definition};"))?;
-        }
-    }
+    add_missing_columns(
+        &tx,
+        "sessions",
+        &[
+            ("pass_id", "INTEGER REFERENCES member_passes(id)"),
+            ("pass_minutes", "INTEGER NOT NULL DEFAULT 0"),
+            ("pass_balance", "INTEGER"),
+        ],
+    )?;
+    // Added in 2.2: voided passes keep their reason and time.
+    add_missing_columns(&tx, "member_passes", &[("void_reason", "TEXT NOT NULL DEFAULT ''"), ("voided_at", "TEXT")])?;
     tx.execute_batch(PASS_OBJECTS)?;
     for (key, value) in SETTINGS_DEFAULTS {
         tx.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)", params![key, value])?;
@@ -207,6 +206,20 @@ pub fn init(path: &Path) -> ApiResult<()> {
         set_flag(&tx, "seeded_passes")?;
     }
     tx.commit()?;
+    Ok(())
+}
+
+fn add_missing_columns(conn: &Connection, table: &str, columns: &[(&str, &str)]) -> ApiResult<()> {
+    let existing: Vec<String> = {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let names = stmt.query_map([], |r| r.get::<_, String>(1))?.collect::<Result<_, _>>()?;
+        names
+    };
+    for (column, definition) in columns {
+        if !existing.iter().any(|c| c == column) {
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition};"))?;
+        }
+    }
     Ok(())
 }
 

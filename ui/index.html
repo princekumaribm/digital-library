@@ -76,7 +76,10 @@
     <section class="view" id="view-dashboard" hidden>
       <header class="page-head">
         <div><h1>Dashboard</h1><p class="muted">Live view of who is checked in right now.</p></div>
-        <button class="btn primary" id="btnCheckin">+ New check-in</button>
+        <div class="row">
+          <button class="btn" id="btnDaySummary">Day summary</button>
+          <button class="btn primary" id="btnCheckin">+ New check-in</button>
+        </div>
       </header>
       <div class="stats" id="stats"></div>
       <div class="card">
@@ -129,7 +132,7 @@
             <option value="upcoming">Upcoming</option>
             <option value="used up">Used up</option>
             <option value="expired">Expired</option>
-            <option value="cancelled">Cancelled</option>
+            <option value="voided">Voided</option>
           </select>
           <input type="search" id="pSearch" placeholder="Search member, ID number, phone or pass" autocomplete="off">
         </div>
@@ -185,6 +188,7 @@
     <section class="view" id="view-reports" hidden>
       <header class="page-head">
         <div><h1>Reports</h1><p class="muted">Revenue and usage based on check-out time.</p></div>
+        <button class="btn" id="btnDaySummary2">Day summary</button>
       </header>
       <div class="card">
         <div class="toolbar wrap">
@@ -205,6 +209,10 @@
         <div class="card"><div class="card-head"><h2>By payment method</h2></div><div id="rByPayment"></div></div>
         <div class="card"><div class="card-head"><h2>By rate plan</h2></div><div id="rByPlan"></div></div>
         <div class="card"><div class="card-head"><h2>Top members</h2></div><div id="rTopMembers"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Voided pass sales</h2></div>
+        <div id="rVoided"></div>
       </div>
     </section>
 
